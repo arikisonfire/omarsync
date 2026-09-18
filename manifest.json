@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.arikisonfire.rsync",
+  "name": "omaRSYNC",
+  "version": "1.0.0",
+  "author": "arikisonfire",
+  "license": "MIT",
+  "description": "rsync in your bar: back up folders to USB drives and servers with plain questions in Easy mode or every rsync option in Expert mode, with drive awareness, SSH prompts in the popup, safety checks and a run history",
+  "homepage": "https://github.com/arikisonfire/omarsync",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "omaRSYNC",
+    "description": "Sync folders locally, to drives and over SSH with rsync",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "notify": true,
+      "defaultRsh": "ssh",
+      "historyLimit": 200
+    },
+    "schema": [
+      { "key": "notify", "type": "boolean", "label": "Notify when a sync finishes or needs input" },
+      { "key": "defaultRsh", "type": "string", "label": "SSH command (used for SSH options, Test connection and key setup)" },
+      { "key": "historyLimit", "type": "integer", "label": "Runs kept in history (10 to 1000)" }
+    ]
+  }
+}
