@@ -59,9 +59,93 @@ of a terminal, and shows you the command it is about to run.
   directly. Nothing is run through a shell.
 - **The command preview** shows exactly what will run, and copies to the clipboard.
 
-| Filters | Command preview and profiles |
+| Filters | Command preview and [profiles](#profiles-set-it-up-once-sync-forever) |
 | --- | --- |
 | ![Filters](docs/filters.png) | ![Command preview](docs/expert-command.png) |
+
+### Profiles: set it up once, sync forever
+
+Getting a backup job right takes a few minutes: the right folders, the right goal,
+the filters that keep `node_modules/` out, the ssh port of your server. A
+**profile** keeps all of it under one name, so from then on a backup is a single
+click — or no click at all.
+
+- **Save:** type a name under *Profiles* in the Job tab, e.g. `Photos → Backup HDD`,
+  and click *Save profile*. Saving under an existing name updates that profile.
+- **Load:** one click on its button fills in the whole job again — source,
+  destination, goal, every option, filters, SSH settings and safe file names. The
+  active profile is highlighted, and profiles work the same in Easy and Expert mode.
+- **Delete:** right-click the button, then right-click again within four seconds.
+- **Drives stay found:** a profile remembers a USB disk by its UUID, not by its mount
+  point. Plug the disk in anywhere, load the profile, and the paths point to the
+  right place.
+- **Quick picks:** the paths of your profiles show up in the source and destination
+  suggestions, so a new job starts from places you already use.
+
+A few ideas that work well:
+
+| Profile | What it does |
+| --- | --- |
+| `Photos → Backup HDD` | *Copy* your pictures to a USB disk. Nothing on the disk is ever deleted. |
+| `Home → NAS` | *Mirror* your home folder to a server, with a *safety copy* and caches and trash left out |
+| `NAS → Laptop` | Pull a shared folder from the server with *Update*, so newer local edits are kept |
+| `Downloads → Archive` | *Move* finished downloads to a drive and free up the laptop |
+
+#### Run a profile without opening the popup
+
+Every profile can be started by name, from a keybinding, a script or a timer:
+
+```sh
+omarchy-shell io.github.arikisonfire.rsync.jobs run "Photos → Backup HDD"
+omarchy-shell io.github.arikisonfire.rsync.jobs dryRun "Photos → Backup HDD"
+omarchy-shell io.github.arikisonfire.rsync.jobs stop
+omarchy-shell io.github.arikisonfire.rsync.jobs status      # idle | running 42% | ok | failed …
+omarchy-shell io.github.arikisonfire.rsync.jobs show log    # job | options | filters | history | log
+```
+
+The run shows up in the bar icon, the log and the history like any other run.
+Before it starts, the drive list is read again. If the disk is not plugged in or a
+safety check fails, nothing runs and a notification says why (unless
+notifications are turned off in the settings).
+
+> The command itself counts as the confirmation, so a profile that deletes (Mirror,
+> Move) runs **without the second click**. Try it with `dryRun` first.
+
+A keybinding, in `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + CTRL + R", "Sync photos", 'omarchy-shell io.github.arikisonfire.rsync.jobs run "Photos → Backup HDD"')
+```
+
+A nightly backup at 21:00, as a systemd user timer. It needs the Omarchy shell to be
+running, so it only fires while you are logged in.
+
+```ini
+# ~/.config/systemd/user/omarsync-photos.service
+[Unit]
+Description=omaRSYNC: Photos → Backup HDD
+
+[Service]
+Type=oneshot
+ExecStart=omarchy-shell io.github.arikisonfire.rsync.jobs run "Photos → Backup HDD"
+```
+
+```ini
+# ~/.config/systemd/user/omarsync-photos.timer
+[Unit]
+Description=Nightly photo backup
+
+[Timer]
+OnCalendar=21:00
+
+[Install]
+WantedBy=timers.target
+```
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now omarsync-photos.timer
+```
 
 ### It knows your drives
 
@@ -150,28 +234,13 @@ time stamps make every run copy everything again.
 A left-click opens the popup, a right-click during a run opens the Log tab, and the
 tooltip carries the current percentage, rate and ETA.
 
-### Notifications, keybindings and scripts
+### Notifications
 
 ![A notification when a run finishes](docs/notification.png)
 
 Every finished run sends a notification, and so does a question from ssh while the
-popup is closed.
-
-Saved profiles can be run from a keybinding, a script or a systemd timer:
-
-```sh
-omarchy-shell io.github.arikisonfire.rsync.jobs run "Photos → Backup HDD"
-omarchy-shell io.github.arikisonfire.rsync.jobs dryRun "Photos → Backup HDD"
-omarchy-shell io.github.arikisonfire.rsync.jobs stop
-omarchy-shell io.github.arikisonfire.rsync.jobs status      # idle | running 42% | ok | failed …
-omarchy-shell io.github.arikisonfire.rsync.jobs show log    # job | options | filters | history | log
-```
-
-In `~/.config/hypr/bindings.lua`:
-
-```lua
-o.bind("SUPER + CTRL + R", "Sync photos", 'omarchy-shell io.github.arikisonfire.rsync.jobs run "Photos → Backup HDD"')
-```
+popup is closed. To start profiles from a keybinding or a timer, see
+[Run a profile without opening the popup](#run-a-profile-without-opening-the-popup).
 
 ### Follows your theme
 
