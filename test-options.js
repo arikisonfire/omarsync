@@ -118,6 +118,8 @@ test("safety: deleting into /, home, remote home, source inside destination", ()
   assert(e({ archive: true, delete: true }, { dst: "/run/media/me/" }).some(x => /Refusing/.test(x)))
   assert(e({ archive: true, delete: true }, { dst: "backup" }).some(x => /Refusing/.test(x)))
   assert(!e({ archive: true, delete: true }, { dst: "/run/media/me/Backup/" }).some(x => /Refusing/.test(x)))
+  // a drive mounted straight under /run/media (VeraCrypt) is a drive root, not the user's drive folder
+  assert(!e({ archive: true, delete: true }, { dst: "/run/media/veracrypt2" }).some(x => /Refusing/.test(x)))
   assert(!e({ archive: true, delete: true }, { dst: "/home/me/backup" }).some(x => /Refusing/.test(x)))
   assert(e({ archive: true, delete: true }, { dst: "u@nas:~other/" }).some(x => /remote home/.test(x)))
   // --delete-missing-args deletes on the receiver too

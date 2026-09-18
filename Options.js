@@ -456,8 +456,13 @@ var PROTECTED_DIRS = ["/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64"
 // p must be absolute (Locations.absolutePath resolves ~ and relative paths)
 function protectedPath(p, home) {
   if (p === "" || p === "/" || p.charAt(0) !== "/") return true
-  if (PROTECTED_DIRS.indexOf(p) >= 0 || /^\/run\/media\/[^\/]+$/.test(p)) return true
+  if (PROTECTED_DIRS.indexOf(p) >= 0) return true
   var h = home ? normalizePath(home) : ""
+  // udisks puts your drives in /run/media/USER; other tools (VeraCrypt: /run/media/veracrypt1)
+  // mount a drive right there, and its root is a fine mirror target. A drive mounted
+  // inside a deleting destination is caught separately (Panel.mountsInside).
+  var user = h.replace(/^.*\//, "")
+  if (user && p === "/run/media/" + user) return true
   return h !== "" && (p === h || isInside(h, p))
 }
 
