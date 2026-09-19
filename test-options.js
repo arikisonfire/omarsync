@@ -225,6 +225,13 @@ test("unmounted media and anchor sanitising", () => {
   assert.strictEqual(L.unmountedMedia("/run/media/me/Other/x", mounts, "/home/me"), "/run/media/me/Other")
   assert.strictEqual(L.unmountedMedia("/media/usb", mounts, "/home/me"), "/media/usb")
   assert.strictEqual(L.unmountedMedia("/home/me/x", mounts, "/home/me"), "")
+  // VeraCrypt mounts a drive right under /run/media; the per-user folder is no drive
+  const vc = L.parseLsblk(JSON.stringify({ blockdevices: [{ path: "/dev/sda", tran: "usb", children: [{ path: "/dev/sda2", children: [
+    { path: "/dev/mapper/veracrypt1", uuid: "6AA3-CDD9", fstype: "exfat", mountpoints: ["/run/media/veracrypt1"] }] }] }] }))
+  assert.strictEqual(L.unmountedMedia("/run/media/veracrypt1/Nextcloud", vc, "/home/me"), "")
+  assert.strictEqual(L.unmountedMedia("/run/media/veracrypt2/Nextcloud", vc, "/home/me"), "/run/media/veracrypt2/Nextcloud")
+  const userDir = L.parseLsblk(JSON.stringify({ blockdevices: [{ path: "/dev/sdc1", uuid: "u", fstype: "ext4", mountpoints: ["/run/media/me"], hotplug: true }] }))
+  assert.strictEqual(L.unmountedMedia("/run/media/me/Backup/x", userDir, "/home/me"), "/run/media/me/Backup")
   assert.strictEqual(L.sanitizeAnchor({ uuid: "abc-1", rel: "/../../etc" }), null)
   assert.strictEqual(L.sanitizeAnchor({ uuid: "abc", rel: "etc" }), null)
   assert.strictEqual(L.sanitizeAnchor({ uuid: "$(x)", rel: "" }), null)
@@ -286,6 +293,28 @@ test("presets adapt to FAT/exFAT/NTFS destinations", () => {
   assert.strictEqual(O.matchPreset(move).id, "move")
 })
 
+test("presets match in any key order, as Qt's JSON.stringify leaves it", () => {
+  // Qt's JS engine keeps an object's own key order even when JSON.stringify
+  // gets a sorted key list, and a profile's job comes back with sorted keys.
+  const Q = {}
+  vm.createContext(Q)
+  vm.runInContext(`(function() {
+    var stringify = JSON.stringify
+    JSON.stringify = function(v, keys, space) {
+      if (!Array.isArray(keys) || !v || typeof v !== "object") return stringify(v, keys, space)
+      var o = {}
+      Object.keys(v).forEach(function(k) { if (keys.indexOf(k) >= 0) o[k] = v[k] })
+      return stringify(o, null, space)
+    }
+  })()`, Q)
+  vm.runInContext(src, Q)
+  const sorted = o => Object.keys(o).sort().reduce((r, k) => (r[k] = o[k], r), {})
+  for (const p of Q.PRESETS) for (const limited of [false, true]) {
+    const opts = sorted(Object.assign({ partial: true, safeNames: limited }, Q.presetOpts(p, limited)))
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(Q.matchPreset(opts))), { id: p.id, limitedFs: limited }, p.id + (limited ? " on FAT/exFAT" : ""))
+  }
+})
+
 test("dry run progress comes from the file counter, not the bytes", () => {
   const line = "      9,923,668   0%    9.24GB/s    0:00:00 (xfr#5, ir-chk=1136/20761)"
   const p = O.parseProgress(line)
@@ -295,8 +324,7 @@ test("dry run progress comes from the file counter, not the bytes", () => {
   assert.strictEqual(s.done, 19625)
   assert.strictEqual(s.total, 20761)
   assert.strictEqual(s.percent, 94)
-  assert.strictEqual(s.eta, "0:00:23")
-  assert.strictEqual(O.scanProgress(p, 1000).eta, "", "no estimate in the first seconds")
+  assert.strictEqual(s.rate, 49)
   assert.strictEqual(O.scanProgress(O.parseProgress("   1,234  3%  1MB/s  0:00:10"), 9000), null)
   assert.strictEqual(O.formatClock(3725), "1:02:05")
 })

@@ -136,6 +136,13 @@ cmd_run() {
     kill -TERM -- "-$child" 2>/dev/null
     for _ in 1 2 3 4 5 6; do kill -0 "$child" 2>/dev/null || break; sleep 0.5; done
     kill -KILL -- "-$child" 2>/dev/null
+    # Even SIGKILL waits for a process stuck on a drive that stopped answering
+    # (state D). Say so, or the run looks stopped while rsync still holds the drive.
+    for _ in 1 2 3 4; do
+      pgrep -r D -g "$child" >/dev/null 2>&1 || return 0
+      sleep 0.5
+    done
+    printf '%s\n' "rsync did not stop: it is waiting for a drive that stopped answering and ends once the drive answers or is unplugged. Until then the drive stays busy." >&2
   }
   trap cleanup EXIT
   trap 'stop; exit 20' TERM INT HUP

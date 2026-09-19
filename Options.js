@@ -230,7 +230,12 @@ function matchPreset(opts) {
     var def = BY_KEY[k]
     if (def && def.group !== "connection" && def.group !== "output" && def.group !== "filters" && MODIFIER_KEYS.indexOf(k) < 0) behaviour[k] = opts[k]
   }
-  var key = function(o) { return JSON.stringify(o, Object.keys(o).sort()) }
+  // Independent of key order. Not JSON.stringify(o, sortedKeys): Qt's engine
+  // keeps the object's own key order there, and a job loaded from a profile
+  // comes back with its keys sorted, so Mirror would read as "custom".
+  var key = function(o) {
+    return Object.keys(o).sort().map(function(k) { return k + "=" + JSON.stringify(o[k]) }).join(",")
+  }
   for (var i = 0; i < PRESETS.length; i++) {
     if (key(presetOpts(PRESETS[i], false)) === key(behaviour)) return { id: PRESETS[i].id, limitedFs: false }
     if (key(presetOpts(PRESETS[i], true)) === key(behaviour)) return { id: PRESETS[i].id, limitedFs: true }
@@ -672,19 +677,14 @@ function formatClock(sec) {
   return Math.floor(sec / 3600) + ":" + p(Math.floor(sec / 60) % 60) + ":" + p(sec % 60)
 }
 
-// A dry run moves no data, so rsync's byte percentage, rate and ETA are
-// meaningless (0 % at "9 GB/s", ETA 0:00:00). Its file-list counter is real:
-// take the progress from the files checked and the ETA from how long that took.
+// A dry run moves no data, so rsync's byte percentage and rate are
+// meaningless (0 % at "9 GB/s"). Its file-list counter is real: take the
+// progress from the files checked.
 function scanProgress(progress, elapsedMs) {
   if (!progress || !(progress.total > 0) || progress.toCheck < 0) return null
   var done = Math.max(0, progress.total - progress.toCheck)
   var percent = Math.max(0, Math.min(100, Math.floor(done * 100 / progress.total)))
-  var eta = ""
-  // The file list still grows while rsync recurses, so an early estimate would
-  // only jump around.
-  if (done > 50 && elapsedMs > 3000 && done < progress.total)
-    eta = formatClock(Math.round(elapsedMs * (progress.total - done) / done / 1000))
-  return { done: done, total: progress.total, percent: percent, eta: eta,
+  return { done: done, total: progress.total, percent: percent,
            rate: elapsedMs > 1000 ? Math.round(done / (elapsedMs / 1000)) : 0 }
 }
 

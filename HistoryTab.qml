@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls as QQC
-import Quickshell
 import qs.Commons
 import qs.Ui
 
@@ -160,7 +159,7 @@ Flickable {
               foreground: panel.fg
               fontFamily: panel.ff
               fontSize: Style.font.caption
-              onClicked: { Quickshell.execDetached(["wl-copy", "--", historyRow.modelData.command || ""]); panel.flash("Command copied") }
+              onClicked: { panel.copyText(historyRow.modelData.command || ""); panel.flash("Command copied") }
             }
             Button {
               text: "Remove"

@@ -79,10 +79,6 @@ function anchorFor(path, mounts, home) {
   return { uuid: m.uuid, label: m.label || m.model || m.device, rel: p.slice(m.mount === "/" ? 0 : m.mount.length) }
 }
 
-// For a local path under /run/media/<user>/<name> or /media/<name>: that
-// mount point when nothing is mounted there (the directory is empty or gone),
-// else "". Syncing into such a path fills the internal disk, syncing from it
-// with --delete empties the destination.
 // File systems that can't store Unix names and metadata
 var LIMITED_FS = { vfat: "FAT32", exfat: "exFAT", ntfs: "NTFS", ntfs3: "NTFS", fuseblk: "NTFS" }
 
@@ -124,12 +120,21 @@ function fatTimeOpts(opts, src, dst, mounts, home) {
   return o
 }
 
+// For a local path under /run/media/<user>/<name> or /media/<name>: that
+// mount point when nothing is mounted there (the directory is empty or gone),
+// else "". Syncing into such a path fills the internal disk, syncing from it
+// with --delete empties the destination. Some tools mount a drive right under
+// /run/media (VeraCrypt: /run/media/veracrypt1), which holds the path as well;
+// the per-user folder /run/media/<user> itself is never a drive.
 function unmountedMedia(path, mounts, home) {
   var p = expandHome(path, home)
   var m = /^(\/run\/media\/[^\/]+\/[^\/]+|\/media\/[^\/]+)(\/|$)/.exec(p)
   if (!m) return ""
   var fs = mountFor(p, mounts)
-  return fs && (fs.mount === m[1] || fs.mount.indexOf(m[1] + "/") === 0) ? "" : m[1]
+  if (fs && (fs.mount === m[1] || fs.mount.indexOf(m[1] + "/") === 0)) return ""
+  var user = Options.normalizePath(String(home || "")).replace(/^.*\//, "")
+  if (fs && /^\/run\/media\/[^\/]+$/.test(fs.mount) && fs.mount !== "/run/media/" + user) return ""
+  return m[1]
 }
 
 // Anchors come from state files: accept only a UUID and a relative path

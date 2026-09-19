@@ -169,27 +169,34 @@ Column {
     }
   }
 
-  // ---- connection
+  // ---- connection: all of it for a server job; for a local job only what is
+  // switched on (left over from a server job, or set in Expert mode), so a
+  // loaded profile shows everything it sets and it can be turned off here
   Column {
-    visible: root.remote
+    visible: root.remote || root.answers.slowLink || root.answers.resume || root.answers.bandwidth !== "full"
     width: parent.width
     spacing: Style.spacing.lg
-    PanelSectionHeader { text: "CONNECTION"; foreground: root.foreground; fontFamily: root.fontFamily }
+    PanelSectionHeader { text: root.remote ? "CONNECTION" : "TRANSFER"; foreground: root.foreground; fontFamily: root.fontFamily }
     Choice {
+      visible: root.remote || root.answers.slowLink
       width: parent.width
       title: "Slow connection"
-      hint: "Compress the data on the way. Helps over the internet, not in a fast home network"
+      hint: root.remote ? "Compress the data on the way. Helps over the internet, not in a fast home network"
+        : "Only helps over a slow network; for local copies it just costs CPU time"
       checked: root.answers.slowLink
       onToggled: root.answered("slowLink", !root.answers.slowLink)
     }
     Choice {
+      visible: root.remote || root.answers.resume
       width: parent.width
       title: "Resume interrupted files"
-      hint: "If the connection drops, half-copied files continue where they stopped next time"
+      hint: root.remote ? "If the connection drops, half-copied files continue where they stopped next time"
+        : "Only helps with server jobs: here an interrupted run leaves half-copied files under their real names"
       checked: root.answers.resume
       onToggled: root.answered("resume", !root.answers.resume)
     }
     Item {
+      visible: root.remote || root.answers.bandwidth !== "full"
       width: parent.width
       implicitHeight: Math.max(speedText.implicitHeight, speedGroup.implicitHeight)
       Column {
@@ -206,7 +213,8 @@ Column {
           font.bold: true
         }
         Caption {
-          text: root.answers.bandwidth === "custom" ? "A custom limit is set in Expert mode" : "Leave room so others can still use the internet"
+          text: root.answers.bandwidth === "custom" ? "A custom limit is set in Expert mode"
+            : root.remote ? "Leave room so others can still use the internet" : "Slows the copy down; Full speed turns the limit off"
         }
       }
       ButtonGroup {

@@ -65,7 +65,7 @@ Item {
             if (!panel.lastStatus) return ""
             var done = panel.lastStatus === "ok"
               ? panel.icons.check + "  " + (panel.current.dry ? "Dry run finished" : "Sync finished")
-              : panel.lastStatus === "stopped" ? "Stopped"
+              : panel.lastStatus === "stopped" ? "Stopped" + (panel.stuckAfterStop ? " · rsync is still waiting for the drive" : "")
               : Options.exitText(panel.lastExit) + " (code " + panel.lastExit + ")" + (panel.current.dry ? " · dry run" : "")
             var parts = [done]
             if (panel.lastStatus === "ok" || panel.lastStatus === "partial")

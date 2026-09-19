@@ -74,6 +74,23 @@ test("expert-only settings are listed and survive answers", () => {
   assert.deepStrictEqual(plain(E.read(job({ archive: true, bwlimit: 512 })).extras), ["Bandwidth limit"])
 })
 
+test("a local job shows the server-only answers it has on", () => {
+  // the Mirror profile for two drives, as saved from Easy mode
+  const junk = [".DS_Store", "._*", "Thumbs.db", "desktop.ini", "$RECYCLE.BIN/", "System Volume Information/", "lost+found/"]
+  const j = job({ partial: true, safeNames: true, archive: true, delete: true, perms: false, owner: false, group: false,
+    links: false, devices: false, specials: false }, { filters: junk.map(p => ({ pattern: p, type: "exclude" })) })
+  const a = E.read(j)
+  assert.strictEqual(a.goal, "mirror")
+  assert.strictEqual(a.limitedFs, true)
+  assert(a.skip.systemJunk && !a.skip.caches)
+  assert(a.resume)
+  assert.deepStrictEqual(plain(a.extras), [])
+  const local = { srcName: "a", dstName: "b", contentsOnly: true, remote: false, dstFs: "exFAT" }
+  const s = E.summary(apply(j, "bandwidth", "2"), local)
+  assert(/limits the speed/.test(s) && /half-copied/.test(s) && !/network/.test(s), s)
+  assert(!/half-copied|limits/.test(E.summary(job(O.presetOpts(preset("copy"), false)), local)))
+})
+
 test("summary", () => {
   const ctx = { srcName: "Nextcloud", dstName: "Backup", contentsOnly: true, remote: false, dstFs: "exFAT" }
   let j = apply(job(Object.assign({ safeNames: true }, O.presetOpts(preset("mirror"), true))), "safetyCopy", true)

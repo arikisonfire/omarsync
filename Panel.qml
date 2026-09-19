@@ -420,6 +420,9 @@ Panel {
     }
   }
 
+  // A profile or history entry was loaded (the Job tab scrolls back up to show it)
+  signal jobLoaded()
+
   // Loading a stored job points drive paths at wherever the drive is mounted now.
   function loadJob(j) {
     var job = sanitizeJob(clone(j))
@@ -429,7 +432,12 @@ Panel {
     if (d) job.dst = d
     root.job = job
     root.confirmDestructive = false
+    // Adapted to the drives right away, not a moment later: a run started
+    // straight after loading (IPC, Run again) must see the final job, or its
+    // preflight discards it as changed.
+    root.adaptToLocation()
     stateSave.restart()
+    root.jobLoaded()
   }
 
   function saveProfile(name) {
@@ -615,6 +623,7 @@ Panel {
   property double runEnd: 0           // when the last run finished, for its duration
   property string lastStatus: ""
   property bool hostKeyChanged: false
+  property bool stuckAfterStop: false
   property bool authFailed: false
   property var lastErrors: []
   readonly property bool running: runSession.active
@@ -623,7 +632,18 @@ Panel {
   readonly property var scan: root.running && root.current && root.current.dry && root.progress
     ? Options.scanProgress(root.progress, Date.now() - root.current.start) : null
   readonly property int shownPercent: root.scan ? root.scan.percent : (root.progress ? root.progress.percent : 0)
-  readonly property string shownEta: root.scan ? root.scan.eta : (root.progress ? root.progress.eta : "")
+  // How long the run has been going: a steady number, unlike an estimate of
+  // the time left, which jumps around while rsync still discovers files.
+  property double clock: 0
+  Timer {
+    interval: 1000
+    repeat: true
+    triggeredOnStart: true
+    running: root.running
+    onTriggered: root.clock = Date.now()
+  }
+  readonly property string elapsed: root.running && root.current
+    ? Options.formatClock(Math.max(0, Math.floor((root.clock - root.current.start) / 1000))) : ""
   // Nothing to fill the ring with while rsync is still building the file list
   readonly property real ringProgress: !root.running ? -1
     : root.scan ? root.scan.percent / 100
@@ -635,15 +655,14 @@ Panel {
   // "long" for the bar tooltip, "rate" for the log header, "short" for the
   // footer. A dry run has no meaningful byte rate, so it reports files checked.
   function runDetail(mode) {
+    var time = root.elapsed + (mode === "short" ? "" : " elapsed")
     if (root.scan)
       return (mode === "long" ? root.scan.percent + "% · " : "")
-        + root.scan.done + " of " + root.scan.total + " files checked"
-        + (root.shownEta ? " · about " + root.shownEta + " left" : "")
+        + root.scan.done + " of " + root.scan.total + " files checked · " + time
     if (root.progress && !(root.current && root.current.dry))
-      return mode === "long" ? root.progress.percent + "% · " + root.progress.speed + " · " + root.progress.eta
-        : mode === "rate" ? root.progress.speed + " · ETA " + root.progress.eta
-        : root.progress.percent + "%"
-    return "building the file list …"
+      return (mode === "rate" ? "" : root.progress.percent + "% · ")
+        + (mode === "short" ? "" : root.progress.speed + " · ") + time
+    return "building the file list … · " + time
   }
 
   // The command as it would run, for the preview and both Copy buttons
@@ -676,6 +695,7 @@ Panel {
       preflight.dry = dry
       preflight.argv = r.argv
       preflight.forJob = JSON.stringify(root.runJob)
+      preflight.cancelled = false
       // The resolved paths, then every mount point: lsblk only knows block
       // devices, not network (NFS, SMB, sshfs) or other FUSE mounts.
       preflight.command = ["sh", "-c", 'realpath -m -- "$1" "$2" "$3" || exit 1; findmnt -J -l -o TARGET 2>/dev/null; exit 0',
@@ -691,9 +711,11 @@ Panel {
     property bool dry: false
     property var argv: []
     property string forJob: ""
+    property bool cancelled: false     // stopped (IPC) while the paths were checked
     stdout: StdioCollector { id: preflightOut; waitForEnd: true }
     onExited: function(code) {
-      if (forJob !== JSON.stringify(root.runJob)) { root.flash("The job changed before the run started"); return }
+      if (cancelled) { cancelled = false; return }
+      if (forJob !== JSON.stringify(root.runJob)) return root.preflightFailed("The job changed before the run started")
       // Three realpath lines (each starting with "/"), then findmnt's JSON
       // starting with a lone "{". Exactly three lines, or nothing runs.
       var lines = preflightOut.text.replace(/\n$/, "").split("\n")
@@ -761,6 +783,7 @@ Panel {
     root.runEnd = 0
     root.lastStatus = ""
     root.hostKeyChanged = false
+    root.stuckAfterStop = false
     root.authFailed = false
     root.lastErrors = []
     root.keyringUsedInSession = false
@@ -776,7 +799,7 @@ Panel {
     if (!l) return
     root.pendingLaunch = null
     pendingLaunchTimeout.stop()
-    if (l.forJob !== JSON.stringify(root.runJob)) { root.flash("The job changed before the run started"); return }
+    if (l.forJob !== JSON.stringify(root.runJob)) return root.preflightFailed("The job changed before the run started")
     Qt.callLater(root.launchRun, l.dry, l.argv, true)
   }
 
@@ -809,8 +832,8 @@ Panel {
       l.items = []
     }
     if (l.logs.length) {
-      var drop = logModel.count + l.logs.length - 400
-      if (drop > 0) logModel.remove(0, Math.min(drop, logModel.count))
+      var drop = Math.min(logModel.count + l.logs.length - 400, logModel.count)
+      if (drop > 0) logModel.remove(0, drop)
       logModel.append(l.logs.slice(-400))
       var errs = l.logs.filter(function(e) { return e.error }).map(function(e) { return e.text })
       if (errs.length) root.lastErrors = root.lastErrors.concat(errs).slice(-4)
@@ -862,6 +885,8 @@ Panel {
   }
 
   function onRunStderr(line) {
+    // askpass.sh: after Stop, rsync still hangs on a drive that stopped answering
+    if (/^rsync did not stop:/.test(line)) root.stuckAfterStop = true
     if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/.test(line)) root.hostKeyChanged = true
     if (/Permission denied \(|Too many authentication failures/.test(line)) root.authFailed = true
     if (line.trim() !== "") appendLog(line, true)
@@ -894,7 +919,8 @@ Panel {
     if (root.notify) {
       var title = (cur.dry ? "Dry run " : "Sync ") + (root.lastStatus === "ok" ? "finished" : root.lastStatus === "stopped" ? "stopped" : root.lastStatus === "partial" ? "partly finished" : "failed")
       // the notification daemon renders markup: escape paths and file names
-      var body = root.escapeMarkup(root.historyTitle(entry) + "\n" + root.historySummary(entry))
+      var body = root.escapeMarkup(root.historyTitle(entry) + "\n" + root.historySummary(entry)
+        + (root.stuckAfterStop ? "\nrsync is still waiting for the drive, see the log" : ""))
       Quickshell.execDetached(["notify-send", "-a", root.appName, "-u", root.lastStatus === "failed" ? "critical" : "normal", "--", title, body])
     }
   }
@@ -1168,7 +1194,7 @@ Panel {
     } else if (accepted && remember && value && key) {
       root.storePassphrase(key, value)
     }
-    var proc = answerComponent.createObject(root, {
+    var proc = stdinProcess.createObject(root, {
       command: ["bash", root.helper, "answer", p.dir, p.id],
       payload: (accepted ? "Y" + value : "N") + "\n"
     })
@@ -1176,20 +1202,27 @@ Panel {
   }
 
   Component {
-    id: answerComponent
+    id: stdinProcess
     Process {
       property string payload: ""
+      property bool closeStdin: false  // for programs that read up to the end
       stdinEnabled: true
-      onStarted: { write(payload); payload = "" }
+      onStarted: { write(payload); payload = ""; if (closeStdin) stdinEnabled = false }
       onExited: destroy()
     }
+  }
+
+  // wl-copy gets the text on stdin: as an argument it would stay readable in
+  // its command line (ps) for as long as it holds the clipboard.
+  function copyText(text) {
+    stdinProcess.createObject(root, { command: ["wl-copy"], payload: text, closeStdin: true }).running = true
   }
 
   // Called once authentication evidently worked: store a password the user
   // asked to remember.
   function authSucceeded() {
     if (!root.pendingSecret) return
-    var proc = answerComponent.createObject(root, {
+    var proc = stdinProcess.createObject(root, {
       command: ["bash", root.helper, "store", root.pendingTarget],
       payload: root.pendingSecret + "\n"
     })
@@ -1204,7 +1237,7 @@ Panel {
   // A passphrase is checked against its key file before it is stored, so
   // unlike a password it needn't wait for the login to succeed.
   function storePassphrase(key, value) {
-    var proc = answerComponent.createObject(root, { command: ["bash", root.helper, "store-key", key], payload: value + "\n" })
+    var proc = stdinProcess.createObject(root, { command: ["bash", root.helper, "store-key", key], payload: value + "\n" })
     proc.exited.connect(function(code) {
       root.flash(code === 0 ? "The passphrase of " + root.fileName(key) + " is saved in the keyring"
         : code === 2 ? "Not saved: that passphrase does not unlock " + key
@@ -1216,13 +1249,13 @@ Panel {
 
   function forgetPassword() {
     if (!root.keyringTarget) return
-    var proc = answerComponent.createObject(root, { command: ["bash", root.helper, "forget", root.keyringTarget], payload: "" })
+    var proc = stdinProcess.createObject(root, { command: ["bash", root.helper, "forget", root.keyringTarget], payload: "" })
     proc.exited.connect(function() { root.checkSaved() })
     proc.running = true
   }
 
   function forgetPassphrase() {
-    var proc = answerComponent.createObject(root, { command: ["bash", root.helper, "forget-key", root.setupKeyFile], payload: "" })
+    var proc = stdinProcess.createObject(root, { command: ["bash", root.helper, "forget-key", root.setupKeyFile], payload: "" })
     proc.exited.connect(function() { root.checkSaved() })
     proc.running = true
   }
@@ -1349,6 +1382,10 @@ Panel {
         pendingLaunchTimeout.stop()
         stopped.push("starting run")
       }
+      if (preflight.running) {
+        preflight.cancelled = true
+        stopped.push("starting run")
+      }
       if (runSession.active) { runSession.stop(); stopped.push(root.current && root.current.dry ? "dry run" : "sync") }
       if (auxSession.active) { auxSession.stop(); stopped.push(root.auxKind === "setup" ? "key setup" : "connection test") }
       return stopped.length ? "stopping " + stopped.join(", ") : "nothing to stop"
@@ -1441,6 +1478,7 @@ Panel {
             running: root.busy && root.prompt === null
             progress: root.ringProgress
             badge: root.iconBadge
+            animate: root.opened
             anchors.verticalCenter: parent.verticalCenter
           }
           Column {
@@ -1466,6 +1504,7 @@ Panel {
               text: root.prompt ? "WAITING FOR YOU"
                 : root.running ? (root.current && root.current.dry ? "DRY RUN " : "SYNCING ")
                     + (root.scan || (root.progress && !(root.current && root.current.dry)) ? root.shownPercent + "%" : "· CHECKING")
+                    + " · " + root.elapsed
                 : root.authState === "checking" && root.busy ? "LOGGING IN"
                 : auxSession.active ? "CONNECTING"
                 : root.lastStatus ? "LAST RUN: " + root.lastStatus.toUpperCase() : "READY"

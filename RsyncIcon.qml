@@ -17,6 +17,7 @@ Item {
   property bool running: false
   property real progress: -1           // 0..1, < 0 = unknown
   property string badge: ""            // "" | prompt | failed | done | dry
+  property bool animate: true          // false while nobody can see it (closed popup)
 
   implicitWidth: 16
   implicitHeight: 16
@@ -54,8 +55,10 @@ Item {
       ctx.stroke()
     }
 
-    RotationAnimator on rotation {
-      running: root.indeterminate
+    // Not a RotationAnimator: that runs in the window's render thread and
+    // stood still in the popup, whose window is hidden and shown again.
+    NumberAnimation on rotation {
+      running: root.indeterminate && root.animate
       from: 0
       to: 360
       duration: 1100

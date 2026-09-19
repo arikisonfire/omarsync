@@ -178,6 +178,10 @@ function summary(job, ctx) {
     if (a.bandwidth !== "full") net.push("limits the speed")
     if (a.resume) net.push("resumes interrupted files")
     out.push("Over the network it " + net.join(", ") + ".")
+  } else if (!ctx.remote) {
+    // left over from a server job or set in Expert mode
+    if (a.bandwidth !== "full") out.push("It limits the speed.")
+    if (a.resume) out.push("An interrupted run leaves half-copied files in place under their real names.")
   }
   return out.join(" ")
 }

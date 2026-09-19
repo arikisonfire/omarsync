@@ -33,8 +33,9 @@ of a terminal, and shows you the command it is about to run.
 - **Safety and what to leave out:** keep a safety copy (replaced and deleted files
   are moved to `.rsync-backup/<date>` first), skip caches and trash, skip system
   junk files.
-- **Connection** (server jobs only): slow connection, resume interrupted files, and
-  a speed limit.
+- **Connection** (server jobs): slow connection, resume interrupted files, and a
+  speed limit. A local job shows them only while one is on, so a loaded profile
+  hides nothing.
 - **What will happen:** the whole job in one plain paragraph, before anything runs.
 - Easy mode keeps no settings of its own. It reads the same job Expert mode edits,
   so you can switch at any time.
@@ -117,35 +118,8 @@ A keybinding, in `~/.config/hypr/bindings.lua`:
 o.bind("SUPER + CTRL + R", "Sync photos", 'omarchy-shell io.github.arikisonfire.rsync.jobs run "Photos → Backup HDD"')
 ```
 
-A nightly backup at 21:00, as a systemd user timer. It needs the Omarchy shell to be
-running, so it only fires while you are logged in.
-
-```ini
-# ~/.config/systemd/user/omarsync-photos.service
-[Unit]
-Description=omaRSYNC: Photos → Backup HDD
-
-[Service]
-Type=oneshot
-ExecStart=omarchy-shell io.github.arikisonfire.rsync.jobs run "Photos → Backup HDD"
-```
-
-```ini
-# ~/.config/systemd/user/omarsync-photos.timer
-[Unit]
-Description=Nightly photo backup
-
-[Timer]
-OnCalendar=21:00
-
-[Install]
-WantedBy=timers.target
-```
-
-```sh
-systemctl --user daemon-reload
-systemctl --user enable --now omarsync-photos.timer
-```
+The same command works from a script or a timer (cron, or a systemd user timer). It
+needs the Omarchy shell to be running, so a timer only fires while you are logged in.
 
 ### It knows your drives
 
@@ -215,7 +189,7 @@ time stamps make every run copy everything again.
 - Passwords in stored command lines and jobs are **redacted** (`sshpass -p`,
   `pass…=`, `scheme://user:pw@`).
 - The log shows rsync's itemized changes live, filtered by New, Updated, Deleted,
-  Attributes and Messages, with the current rate and an ETA, and a Stop button.
+  Attributes and Messages, with the current rate, the elapsed time and a Stop button.
 
 ### Bar icon
 
@@ -232,7 +206,7 @@ time stamps make every run copy everything again.
 | Red dot | The last run failed |
 
 A left-click opens the popup, a right-click during a run opens the Log tab, and the
-tooltip carries the current percentage, rate and ETA.
+tooltip carries the current percentage, rate and elapsed time.
 
 ### Notifications
 
@@ -263,8 +237,8 @@ Built and used on an Apple MacBook Air M2 running Omarchy 4.0.3 on Asahi Linux
 Automated tests, no shell needed:
 
 ```sh
-node test-options.js   # 22 tests: option catalog, argv, safety guards, parsing, presets
-node test-easy.js      #  6 tests: Easy mode questions, answers and summary
+node test-options.js   # 23 tests: option catalog, argv, safety guards, parsing, presets
+node test-easy.js      #  7 tests: Easy mode questions, answers and summary
 ```
 
 **Not tested yet**, so reports are welcome: laptop-to-laptop over SSH, uploading to

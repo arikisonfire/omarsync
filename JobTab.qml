@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls as QQC
-import Quickshell
 import qs.Commons
 import qs.Ui
 
@@ -21,6 +20,13 @@ Flickable {
   clip: true
   boundsBehavior: Flickable.StopAtBounds
   QQC.ScrollBar.vertical: QQC.ScrollBar { policy: jobPage.contentHeight > jobPage.height ? QQC.ScrollBar.AlwaysOn : QQC.ScrollBar.AlwaysOff }
+
+  // A loaded profile changes the goal and switches up here, while its button
+  // sits at the bottom: scroll up so the change is seen.
+  Connections {
+    target: panel
+    function onJobLoaded() { jobPage.contentY = 0 }
+  }
 
   Column {
     id: jobColumn
@@ -361,7 +367,7 @@ Flickable {
           foreground: panel.fg
           fontFamily: panel.ff
           onClicked: {
-            Quickshell.execDetached(["wl-copy", "--", panel.commandText])
+            panel.copyText(panel.commandText)
             panel.flash("Command copied")
           }
         }
@@ -447,7 +453,11 @@ Flickable {
             foreground: panel.fg
             fontFamily: panel.ff
             fontSize: Style.font.caption
-            onClicked: { panel.loadJob(modelData.job); panel.profileName = modelData.name }
+            onClicked: {
+              panel.loadJob(modelData.job)
+              panel.profileName = modelData.name
+              panel.flash("Loaded “" + modelData.name + "”")
+            }
             onRightClicked: {
               if (panel.armedProfile !== modelData.name) { panel.armedProfile = modelData.name; armedProfileReset.restart(); return }
               panel.armedProfile = ""
