@@ -172,10 +172,13 @@ needs the Omarchy shell to be running, so a timer only fires while you are logge
   the job's destination.
 - With *Safe file names*, the pass that clears renamed left-overs off the
   destination walks it through directory file descriptors opened with
-  `O_NOFOLLOW`. A symlinked folder is reported and skipped instead of followed,
-  a drive that appeared inside the destination is left alone, what your filters
-  exclude is kept, and every removed entry counts against `--max-delete` —
-  exactly as rsync's own `--delete` treats them.
+  `O_NOFOLLOW` — the destination itself included: its path is resolved before
+  the job starts, opened again one component at a time without following a
+  single link, and checked to still be the same folder it was. A destination
+  swapped in the meantime and a symlinked folder inside it are reported and
+  skipped instead of followed, a drive that appeared inside the destination is
+  left alone, what your filters exclude is kept, and every removed entry counts
+  against `--max-delete` — exactly as rsync's own `--delete` treats them.
 - A deleting run needs a **second click** on *Confirm run* within four seconds.
   Editing the job cancels it.
 - **Dry run** is always one click away and changes nothing.
@@ -253,7 +256,7 @@ Automated tests, no shell needed:
 ```sh
 node test-options.js   # 24 tests: option catalog, argv, safety guards, parsing, presets
 node test-easy.js      #  7 tests: Easy mode questions, answers and summary
-python3 test-safenames.py   # 15 tests: safe file names against a real rsync
+python3 test-safenames.py   # 19 tests: safe file names against a real rsync
 ```
 
 **Not tested yet**, so reports are welcome: laptop-to-laptop over SSH, uploading to

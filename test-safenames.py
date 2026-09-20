@@ -98,6 +98,40 @@ def symlink_planted_during_the_run(root):
     assert code == 23, "exit %d, expected 23" % code
 
 
+def destination_root_swapped_during_the_run(root):
+    """The destination itself is replaced by a symlink while the job runs: the
+    wrapper swaps it once the transfer pass is through, so the folder step 4
+    would open is no longer the one the run started in."""
+    write(os.path.join(root, "src", "Docs", "normal.txt"))
+    os.makedirs(os.path.join(root, "dst"))
+    kept = victims(root)
+    dst, target = os.path.join(root, "dst"), os.path.join(root, "outside")
+    wrapper = os.path.join(root, "rsync-wrapper")
+    write(wrapper, '#!/bin/sh\nrsync "$@"\nstatus=$?\n'
+                   'case " $* " in *" --delete "*) rm -rf %s; ln -s %s %s ;; esac\nexit $status\n'
+                   % (dst, target, dst))
+    os.chmod(wrapper, 0o755)
+    code, out, err = run(root, "to", "-a", "--delete", "--itemize-changes", "--", "src/", "dst/", rsync=wrapper)
+    assert tree(target) == kept, "outside the destination: %s" % tree(target)
+    assert deletions(out) == [], "deleted although the destination had changed: %s" % deletions(out)
+    assert "not the folder this run started in" in err, "no note about the swap: %r" % err
+    assert code == 23, "exit %d, expected 23" % code
+
+
+def a_symlinked_destination_still_works(root):
+    """The destination the user picked may well be reached through a symlink.
+    It is resolved once, before the job runs, and cleaned like any other."""
+    os.makedirs(os.path.join(root, "real"))
+    os.symlink(os.path.join(root, "real"), os.path.join(root, "dst"))
+    leftovers(root)
+    code, out, err = run(root, "to", "-a", "--delete", "--itemize-changes", "--", "src/", "dst/")
+    assert deletions(out) == ["Docs/gone:dir/", "Docs/gone:dir/in.txt",
+                              "Docs/gone:file.txt", "Docs/keep:it.log"], deletions(out)
+    assert tree(os.path.join(root, "real")) == {"Docs", os.path.join("Docs", "normal.txt")}, \
+        tree(os.path.join(root, "real"))
+    assert code == 0, "exit %d, expected 0: %s" % (code, err)
+
+
 def walk_down_refuses_symlinks(root):
     """The helpers themselves, without rsync."""
     sn = load_helper()
@@ -151,6 +185,43 @@ def walk_down_refuses_symlinks(root):
         os.close(base_fd)
 
 
+def accepted_destination_is_bound_to_its_inode(root):
+    """The destination root itself, without rsync: it is opened without
+    following one link, and only while it is still the folder it was."""
+    sn = load_helper()
+    dst, away, other = (os.path.join(root, name) for name in ("dst", "away", "other"))
+    for path in (dst, away, other):
+        os.makedirs(path)
+    accepted = sn._accepted_dst(dst + "/")
+    fd, why = sn._open_accepted(accepted)
+    assert fd is not None, "the destination was refused: %s" % why
+    assert os.fstat(fd).st_ino == os.stat(dst).st_ino, "another folder was opened"
+    os.close(fd)
+    os.rmdir(dst)
+    os.symlink(away, dst)                      # the same path, now a symlink
+    fd, why = sn._open_accepted(accepted)
+    assert fd is None and why.errno in (errno.ELOOP, errno.ENOTDIR), "a symlinked destination gave %s" % why
+    os.unlink(dst)
+    os.rename(other, dst)                      # the same path, another real folder
+    fd, why = sn._open_accepted(accepted)
+    assert fd is None and why.errno == errno.ESTALE, "a swapped destination gave %s" % why
+    # a destination rsync still has to create: opened once it is there
+    os.rmdir(dst)
+    accepted = sn._accepted_dst(dst)
+    assert accepted[2] == ["dst"], "the missing part is %s" % (accepted[2],)
+    fd, why = sn._open_accepted(accepted)
+    assert fd is None and why.errno == errno.ENOENT, "a missing destination gave %s" % why
+    os.symlink(away, dst)
+    fd, why = sn._open_accepted(accepted)
+    assert fd is None and why.errno in (errno.ELOOP, errno.ENOTDIR), "a symlink in its place gave %s" % why
+    os.unlink(dst)
+    os.makedirs(dst)
+    fd, why = sn._open_accepted(accepted)
+    assert fd is not None, "the folder rsync created was refused: %s" % why
+    os.close(fd)
+    assert tree(away) == set(), "the symlink target changed"
+
+
 def load_helper():
     import importlib.util
     spec = importlib.util.spec_from_file_location("safenames", HELPER)
@@ -177,6 +248,18 @@ def orphans_are_deleted(root):
     assert deletions(out) == ["Docs/gone:dir/", "Docs/gone:dir/in.txt",
                               "Docs/gone:file.txt", "Docs/keep:it.log"], deletions(out)
     assert tree(os.path.join(root, "dst")) == {"Docs", os.path.join("Docs", "normal.txt")}, tree(os.path.join(root, "dst"))
+    assert code == 0, "exit %d, expected 0: %s" % (code, err)
+
+
+def a_destination_without_a_slash_is_cleaned_too(root):
+    """A job may write its destination with or without a trailing slash. rsync
+    prints the listing step 4 compares against below the path only for the
+    first and below its parent for the second, so the pass has to ask for the
+    form it reads. It kept every left-over otherwise."""
+    leftovers(root)
+    code, out, err = run(root, "to", "-a", "--delete", "--itemize-changes", "--", "src/", "dst")
+    assert deletions(out) == ["Docs/gone:dir/", "Docs/gone:dir/in.txt",
+                              "Docs/gone:file.txt", "Docs/keep:it.log"], deletions(out)
     assert code == 0, "exit %d, expected 0: %s" % (code, err)
 
 
@@ -307,8 +390,11 @@ def folder_times_are_restored(root):
     assert int(got) == 1000000000, "folder time is %d" % got
 
 
-for case in (symlinked_folder_with_keep_dirlinks, symlink_planted_during_the_run, walk_down_refuses_symlinks,
-             orphans_are_deleted, excluded_names_survive, delete_excluded_removes_them, protect_rules_stop_the_pass,
+for case in (symlinked_folder_with_keep_dirlinks, symlink_planted_during_the_run,
+             destination_root_swapped_during_the_run, a_symlinked_destination_still_works,
+             walk_down_refuses_symlinks, accepted_destination_is_bound_to_its_inode,
+             orphans_are_deleted, a_destination_without_a_slash_is_cleaned_too,
+             excluded_names_survive, delete_excluded_removes_them, protect_rules_stop_the_pass,
              source_without_a_slash_and_an_unsafe_root, restoring_from_a_drive, a_dry_run_only_reports,
              max_delete_is_honoured, without_recursion_it_stays_at_the_top,
              max_delete_counts_a_whole_folder, an_unreadable_folder_is_reported, folder_times_are_restored):

@@ -18,8 +18,11 @@ How a run works:
      (directories recursively, again without their unsafe children).
   4. With deleting on, renamed entries on DST whose source is gone are removed.
      That pass walks DST through directory file descriptors opened with
-     O_NOFOLLOW, so it never enters a symlink below DST, and it leaves alone
-     what the job's filters exclude, the way rsync's own --delete does.
+     O_NOFOLLOW, DST itself included: its path is resolved once before the job
+     runs, opened again from "/" without following a single link and checked to
+     be the same folder. So it never enters a symlink below DST, never lands in
+     another tree when DST itself is swapped, and it leaves alone what the job's
+     filters exclude, the way rsync's own --delete does.
 Output keeps rsync's format, with paths as in SRC, so the plugin can parse it.
 Exit code: the most serious rsync exit code of all passes.
 """
@@ -231,6 +234,10 @@ def main():
             entries.append((rel, kind == b"d"))
     src_base = src if src.endswith("/") else (os.path.dirname(src.rstrip("/")) or ".")
     dst_base = dst
+    # The folder this run was confirmed for, read before rsync writes anything:
+    # its path with no symlink left in it, and which folder that is. Every pass
+    # that walks DST itself opens it again from "/" (_open_accepted below).
+    accepted = _accepted_dst(dst_base)
 
     def mapped(rel):
         return "/".join(rename(p) for p in rel.split("/"))
@@ -318,18 +325,26 @@ def main():
         and not any(o in ("--no-times", "--no-t", "--omit-dir-times") or re.match(r"^-[a-zA-Z]*O", o) for o in opts)
 
     # Step 4 and the times below are the only passes that walk DST themselves
-    # instead of leaving it to rsync, so they open every folder under DST with
-    # O_NOFOLLOW (_walk_down). rsync replaces a symlinked directory on the
-    # receiver with a real one; following one here would delete or touch files
-    # outside the destination the run was confirmed for.
+    # instead of leaving it to rsync, so they open DST and every folder under it
+    # with O_NOFOLLOW (_walk_down), and DST has to be the folder this run
+    # started in. rsync replaces a symlinked directory on the receiver with a
+    # real one; following one here, or letting the destination path be swapped
+    # for one, would delete or touch files outside the destination the run was
+    # confirmed for.
     base_fd = None
     mounts = set()
     if deleting or (keep_times and not dry):
         mounts = _mount_points()                 # read once, not per folder
-        try:
-            base_fd = os.open(dst_base, os.O_RDONLY | os.O_DIRECTORY)
-        except OSError:
-            pass                                 # a dry run: nothing is there yet
+        base_fd, why = _open_accepted(accepted)
+        if base_fd is None and why.errno != errno.ENOENT:
+            # ENOENT: a dry run, a remote destination, or one rsync never made
+            if why.errno in (errno.ELOOP, errno.ENOTDIR, errno.ESTALE):
+                note("the destination “%s” is not the folder this run started in any more: renamed "
+                     "leftovers there are kept and folder times stay as rsync left them" % dst)
+            else:
+                note("cannot open the destination “%s” (%s): renamed leftovers there are kept "
+                     "and folder times stay as rsync left them" % (dst, why.strerror or why))
+            codes.append(23)
 
     # 4. renamed entries whose source is gone
     limit_hit = False
@@ -344,7 +359,13 @@ def main():
         # the transfer are also excluded from being deleted"), so DST is listed
         # the way SRC was in step 1: a name missing from that listing is
         # excluded and has to survive this pass.
-        root = dst if src.endswith("/") else os.path.join(dst, mapped(os.path.basename(src.rstrip("/"))))
+        # The path of the descriptor itself, not the one the job was given:
+        # the listing has to describe the folder this pass really opens. rsync
+        # prints the names below a path that ends in a slash and below the
+        # parent of one that does not, and the paths here are built both ways.
+        base_path = _fd_path(base_fd) or dst
+        root = base_path.rstrip("/") + "/" if src.endswith("/") \
+            else os.path.join(base_path, mapped(os.path.basename(src.rstrip("/"))))
         if not os.path.lexists(root):
             listed = set()                       # nothing has been written there yet
         else:
@@ -536,6 +557,52 @@ def _walk_down(base_fd, rel, mounts=None):
         os.close(fd)
         return None, err
     return fd, None
+
+
+def _accepted_dst(path):
+    """(parts, (dev, ino), missing) for the destination: the part of its
+    resolved path that exists now, which folder that is, and what rsync still
+    has to create below it. Read once, before the job writes anything."""
+    real = os.path.realpath(path).strip("/")
+    parts = real.split("/") if real else []
+    missing = []
+    while True:
+        try:
+            st = os.stat("/" + "/".join(parts))
+            return parts, (st.st_dev, st.st_ino), missing
+        except OSError:
+            if not parts:
+                return [], None, missing       # no readable root: nothing is opened later
+            missing.insert(0, parts.pop())
+
+
+def _open_accepted(accepted):
+    """(fd, None) for the destination, or (None, error). Every part of its
+    resolved path is opened from "/" with O_DIRECTORY|O_NOFOLLOW, so a part that
+    has become a symlink since the run started fails here instead of moving the
+    deletions and the time stamps into another tree, and what is reached has to
+    be the folder the run started in (same device and inode). Parts rsync only creates during the
+    run have nothing to compare against, but the walk itself proves that nothing
+    was followed on the way to them."""
+    parts, ident, missing = accepted
+    if ident is None:
+        return None, OSError(errno.ENOENT, "the destination cannot be reached")
+    root_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fd, why = _walk_down(root_fd, "/".join(parts))
+    finally:
+        os.close(root_fd)
+    if fd is None:
+        return None, why
+    st = os.fstat(fd)
+    if (st.st_dev, st.st_ino) != ident:
+        os.close(fd)
+        return None, OSError(errno.ESTALE, "it is not the folder the run started in")
+    if not missing:
+        return fd, None
+    deeper, why = _walk_down(fd, "/".join(missing))
+    os.close(fd)
+    return deeper, why
 
 
 def _fd_path(fd):

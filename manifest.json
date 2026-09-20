@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.arikisonfire.rsync",
   "name": "omaRSYNC",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "author": "arikisonfire",
   "license": "MIT",
   "description": "rsync in your bar: back up folders to USB drives and servers with plain questions in Easy mode or every rsync option in Expert mode, with drive awareness, SSH prompts in the popup, safety checks and a run history",
