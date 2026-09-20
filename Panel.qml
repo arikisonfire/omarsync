@@ -235,8 +235,14 @@ Panel {
   readonly property var blockers: {
     var list = built.errors.slice()
     if (rsyncProblem) list.unshift(rsyncProblem)
-    if (!srcInfo.connected) list.push("Source drive “" + job.srcAnchor.label + "” is not connected")
-    if (!dstInfo.connected) list.push("Destination drive “" + job.dstAnchor.label + "” is not connected")
+    // A drive carrying the saved UUID but not its serial, size and file system
+    // is a different drive: the job must not run on it without being re-picked.
+    if (!srcInfo.connected) list.push(srcInfo.mismatch
+      ? "The connected drive is not the source drive “" + job.srcAnchor.label + "” this job was saved for: choose the source again"
+      : "Source drive “" + job.srcAnchor.label + "” is not connected")
+    if (!dstInfo.connected) list.push(dstInfo.mismatch
+      ? "The connected drive is not the destination drive “" + job.dstAnchor.label + "” this job was saved for: choose the destination again"
+      : "Destination drive “" + job.dstAnchor.label + "” is not connected")
     if (!mountsLoaded && (mediaPath(job.src) || mediaPath(job.dst))) list.push("Checking drives …")
     else {
       var ms = job.srcAnchor ? "" : Locations.unmountedMedia(job.src, mounts, home)
@@ -528,7 +534,7 @@ Panel {
 
   Process {
     id: lsblk
-    command: ["lsblk", "-J", "-o", "NAME,PATH,UUID,LABEL,MOUNTPOINTS,RM,HOTPLUG,TRAN,SIZE,MODEL,FSTYPE"]
+    command: ["lsblk", "-J", "-o", "NAME,PATH,UUID,LABEL,MOUNTPOINTS,RM,HOTPLUG,TRAN,SIZE,MODEL,FSTYPE,SERIAL"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {

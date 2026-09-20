@@ -105,6 +105,14 @@ test("safety: deleting into /, home, remote home, source inside destination", ()
   assert(e({ archive: true, delete: true }, { dst: "nas:" }).some(x => /remote home/.test(x)))
   assert(e({ archive: true, delete: true }, { dst: "u@nas:~/" }).some(x => /remote home/.test(x)))
   assert(!e({ archive: true, delete: true }, { dst: "u@nas:backup" }).some(x => /remote/.test(x)))
+  // system trees are refused all the way down, folders that hold mount points
+  // and scratch space only at the top: /srv/backup is where a backup belongs
+  assert(e({ archive: true, delete: true }, { dst: "/usr/share/x" }).some(x => /Refusing/.test(x)))
+  assert(e({ archive: true, delete: true }, { dst: "/etc/ssh" }).some(x => /Refusing/.test(x)))
+  assert(e({ archive: true, delete: true }, { dst: "nas:/usr/share/x" }).some(x => /system folder/.test(x)))
+  assert(!e({ archive: true, delete: true }, { dst: "/srv/backup" }).length)
+  assert(!e({ archive: true, delete: true }, { dst: "/mnt/disk/b" }).length)
+  assert(!e({ archive: true, delete: true }, { dst: "/var/tmp/try" }).length)
   assert(e({ archive: true, delete: true }, { src: "/data/photos/", dst: "/data" }).some(x => /inside the destination/.test(x)))
   assert(!e({ archive: true }, { src: "/data/photos/", dst: "/data" }).length)
   assert(O.buildArgs(job({}, { src: "/a/", dst: "/a/b" })).warnings.some(x => /inside the source/.test(x)))
@@ -203,7 +211,8 @@ test("lsblk parsing and drive anchors", () => {
   assert.strictEqual(L.drives(mounts).length, 1)
   assert.strictEqual(L.anchorFor("/home/me/Documents", mounts, "/home/me"), null)
   const a = L.anchorFor("/run/media/me/Backup/laptop/", mounts, "/home/me")
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(a)), { uuid: "usb-uuid", label: "Backup", rel: "/laptop/" })
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(a)),
+    { uuid: "usb-uuid", label: "Backup", rel: "/laptop/", serial: "", size: "", fstype: "" })
   assert.strictEqual(L.anchorFor("/run/media/me/Backup", mounts, "/home/me").rel, "")
   // same drive, different mount point
   const moved = L.parseLsblk(LSBLK.replace("/run/media/me/Backup", "/mnt/usb"))
@@ -217,6 +226,31 @@ test("lsblk parsing and drive anchors", () => {
   assert.strictEqual(L.absolutePath("~/docs", "/home/me"), "/home/me/docs")
   assert.strictEqual(L.absolutePath("nas:docs", "/home/me"), "nas:docs")
   assert.strictEqual(L.absolutePath("", "/home/me"), "")
+})
+
+test("a cloned filesystem UUID is not the same drive", () => {
+  const stick = (dev, serial, size) => JSON.stringify({ blockdevices: [
+    { path: "/dev/" + dev, tran: "usb", serial: serial, model: "WD Elements", children: [
+      { path: "/dev/" + dev + "1", uuid: "usb-uuid", label: "Backup", fstype: "exfat", size: size,
+        mountpoints: ["/run/media/me/Backup"] } ] } ] })
+  const mounts = L.parseLsblk(stick("sdb", "SER123", "1.8T"))
+  const a = L.anchorFor("/run/media/me/Backup/laptop", mounts, "/home/me")
+  assert.deepStrictEqual([a.serial, a.size, a.fstype], ["SER123", "1.8T", "exfat"])
+  assert.strictEqual(L.resolveAnchor(a, mounts), "/run/media/me/Backup/laptop")
+  // another drive carrying the same filesystem UUID is refused, not used
+  const clone = L.parseLsblk(stick("sdc", "OTHER", "32G"))
+  assert.strictEqual(L.resolveAnchor(a, clone), "")
+  const info = L.describe("/x", a, clone, "/home/me")
+  assert.strictEqual(info.connected, false)
+  assert.strictEqual(info.mismatch, true)
+  // simply not connected stays a different case
+  assert.strictEqual(L.describe("/x", a, [], "/home/me").mismatch, false)
+  // an anchor saved before the identity was recorded still resolves
+  const old = L.sanitizeAnchor({ uuid: "usb-uuid", label: "Backup", rel: "/laptop" })
+  assert.strictEqual(L.resolveAnchor(old, clone), "/run/media/me/Backup/laptop")
+  // a serial the drive no longer reports is not treated as a mismatch
+  const noSerial = L.parseLsblk(stick("sdb", null, "1.8T"))
+  assert.strictEqual(L.resolveAnchor(a, noSerial), "/run/media/me/Backup/laptop")
 })
 
 test("unmounted media and anchor sanitising", () => {
@@ -236,6 +270,8 @@ test("unmounted media and anchor sanitising", () => {
   assert.strictEqual(L.sanitizeAnchor({ uuid: "abc", rel: "etc" }), null)
   assert.strictEqual(L.sanitizeAnchor({ uuid: "$(x)", rel: "" }), null)
   assert.strictEqual(L.sanitizeAnchor({ uuid: "abc-1", rel: "/a/b/", label: "L" }).rel, "/a/b/")
+  assert.strictEqual(L.sanitizeAnchor({ uuid: "abc-1", rel: "", serial: "x".repeat(200) }).serial.length, 64)
+  assert.strictEqual(L.sanitizeAnchor({ uuid: "abc-1", rel: "", size: 12 }).size, "")
 })
 
 test("nesting warning and limited file systems", () => {
@@ -272,6 +308,9 @@ test("safe file names: limits and file system detection", () => {
   assert(e({}, { dst: "nas:/backup" }).some(x => /local folders/.test(x)))
   assert(e({ linkDest: "/snap" }).some(x => /Link dest/.test(x)))
   assert(e({ backupDir: "old" }).some(x => /absolute Backup dir/.test(x)))
+  // -K keeps a symlinked folder on the receiver, which the clean-up pass of
+  // safe names refuses to enter: rejected here instead of failing every run
+  assert(e({ keepDirlinks: true }).some(x => /Keep receiver dir symlinks/.test(x)))
   assert(!O.buildArgs(job({ safeNames: true })).argv.some(a => a === ""))
   const mounts = L.parseLsblk(JSON.stringify({ blockdevices: [{ path: "/dev/sdb1", uuid: "6AA1", fstype: "exfat", mountpoints: ["/run/media/me"], hotplug: true }] }))
   assert.strictEqual(L.limitedFs("/run/media/me/x", mounts, "/home/me"), "exFAT")

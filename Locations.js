@@ -5,15 +5,17 @@
 // Where a path lives: local disk, removable drive (tracked by filesystem UUID so
 // a job still works when the drive mounts somewhere else) or a remote host.
 
-// lsblk -J -o NAME,PATH,UUID,LABEL,MOUNTPOINTS,RM,HOTPLUG,TRAN,SIZE,MODEL,FSTYPE
+// lsblk -J -o NAME,PATH,UUID,LABEL,MOUNTPOINTS,RM,HOTPLUG,TRAN,SIZE,MODEL,FSTYPE,SERIAL
+// model and serial sit on the drive, not on its partitions, so they travel down.
 function parseLsblk(text) {
   var mounts = []
   var data
   try { data = JSON.parse(text) } catch (e) { return mounts }
 
-  function walk(dev, removable, model) {
+  function walk(dev, removable, model, serial) {
     var rem = removable || dev.rm === true || dev.rm === "1" || dev.hotplug === true || dev.hotplug === "1" || dev.tran === "usb"
     var mdl = dev.model || model || ""
+    var ser = dev.serial || serial || ""
     var points = dev.mountpoints || []
     for (var i = 0; i < points.length; i++) {
       var mp = points[i]
@@ -21,14 +23,15 @@ function parseLsblk(text) {
       // udisks mounts external media under /run/media (or /media)
       var external = rem || /^\/(run\/)?media\//.test(mp)
       mounts.push({ mount: mp, uuid: dev.uuid || "", label: dev.label || "", removable: !!external,
-                    size: dev.size || "", device: dev.path || "", model: String(mdl).trim(), fstype: dev.fstype || "" })
+                    size: dev.size || "", device: dev.path || "", model: String(mdl).trim(),
+                    fstype: dev.fstype || "", serial: String(ser).trim() })
     }
     var children = dev.children || []
-    for (var c = 0; c < children.length; c++) walk(children[c], rem, mdl)
+    for (var c = 0; c < children.length; c++) walk(children[c], rem, mdl, ser)
   }
 
   var devs = (data && data.blockdevices) || []
-  for (var d = 0; d < devs.length; d++) walk(devs[d], false, "")
+  for (var d = 0; d < devs.length; d++) walk(devs[d], false, "", "")
   // Longest mount first so prefix lookups find the innermost file system.
   mounts.sort(function(a, b) { return b.mount.length - a.mount.length })
   return mounts
@@ -70,13 +73,16 @@ function mountFor(path, mounts) {
   return null
 }
 
-// { uuid, label, rel } for a path on a removable drive, else null.
+// { uuid, label, rel, serial, size, fstype } for a path on a removable drive,
+// else null. A filesystem UUID can be cloned onto another drive, so the drive's
+// serial, its size and its file system are kept with it and checked again.
 function anchorFor(path, mounts, home) {
   var p = expandHome(path, home)
   if (!p || p.charAt(0) !== "/" || Options.isRemote(p)) return null
   var m = mountFor(p, mounts)
   if (!m || !m.removable || !m.uuid) return null
-  return { uuid: m.uuid, label: m.label || m.model || m.device, rel: p.slice(m.mount === "/" ? 0 : m.mount.length) }
+  return { uuid: m.uuid, label: m.label || m.model || m.device, rel: p.slice(m.mount === "/" ? 0 : m.mount.length),
+           serial: m.serial || "", size: m.size || "", fstype: m.fstype || "" }
 }
 
 // File systems that can't store Unix names and metadata
@@ -138,22 +144,41 @@ function unmountedMedia(path, mounts, home) {
 }
 
 // Anchors come from state files: accept only a UUID and a relative path
-// that can't climb out of the drive.
+// that can't climb out of the drive. The identity fields are compared, never
+// used as a path or an argument, so bounding their length is enough.
 function sanitizeAnchor(a) {
   if (!a || typeof a !== "object" || typeof a.uuid !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(a.uuid)) return null
   var rel = typeof a.rel === "string" ? a.rel : ""
   if (rel !== "" && rel.charAt(0) !== "/") return null
   if (/(^|\/)\.\.(\/|$)/.test(rel)) return null
-  return { uuid: a.uuid, label: typeof a.label === "string" ? a.label.slice(0, 80) : "", rel: rel }
+  var text = function(v) { return typeof v === "string" ? v.slice(0, 64) : "" }
+  return { uuid: a.uuid, label: typeof a.label === "string" ? a.label.slice(0, 80) : "", rel: rel,
+           serial: text(a.serial), size: text(a.size), fstype: text(a.fstype) }
+}
+
+// { path, mismatch } for an anchor: the path the drive has now, or "" when it
+// is not connected. `mismatch` says a drive does carry the anchor's UUID but
+// not the serial, size and file system it was saved with — a cloned UUID must
+// not silently turn another drive into this job's source or destination.
+// Anchors written before this was recorded have no such fields and still work.
+function anchorMatch(anchor, mounts) {
+  var seen = false
+  if (!anchor || !anchor.uuid) return { path: "", mismatch: false }
+  for (var i = 0; i < mounts.length; i++) {
+    var m = mounts[i]
+    if (m.uuid !== anchor.uuid) continue
+    seen = true
+    if (anchor.serial && m.serial && m.serial !== anchor.serial) continue
+    if (anchor.size && m.size && m.size !== anchor.size) continue
+    if (anchor.fstype && m.fstype && m.fstype !== anchor.fstype) continue
+    return { path: m.mount + (anchor.rel || ""), mismatch: false }
+  }
+  return { path: "", mismatch: seen }
 }
 
 // Current path for an anchor, or "" when the drive is not connected/mounted.
 function resolveAnchor(anchor, mounts) {
-  if (!anchor || !anchor.uuid) return ""
-  for (var i = 0; i < mounts.length; i++) {
-    if (mounts[i].uuid === anchor.uuid) return mounts[i].mount + (anchor.rel || "")
-  }
-  return ""
+  return anchorMatch(anchor, mounts).path
 }
 
 // { kind: "local"|"drive"|"ssh"|"daemon", title, detail, connected }
@@ -164,9 +189,9 @@ function describe(path, anchor, mounts, home) {
   if (ssh) return { kind: "ssh", title: (ssh.user ? ssh.user + "@" : "") + ssh.host, detail: ssh.path || "~", connected: true }
   if (Options.isRemote(p)) return { kind: "daemon", title: "rsync daemon", detail: p, connected: true }
   if (anchor && anchor.uuid) {
-    var now = resolveAnchor(anchor, mounts)
+    var now = anchorMatch(anchor, mounts)
     return { kind: "drive", title: "Drive “" + (anchor.label || anchor.uuid.slice(0, 8)) + "”",
-             detail: (anchor.rel || "/"), connected: now !== "" }
+             detail: (anchor.rel || "/"), connected: now.path !== "", mismatch: now.mismatch }
   }
   var full = absolutePath(p, home)
   var shown = home && full.indexOf(home + "/") === 0 ? "~" + full.slice(home.length) : full

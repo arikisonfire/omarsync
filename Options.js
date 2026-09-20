@@ -458,10 +458,21 @@ function isInside(child, parent) {
 var PROTECTED_DIRS = ["/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64", "/media", "/mnt", "/opt", "/proc",
   "/root", "/run", "/run/media", "/sbin", "/srv", "/sys", "/tmp", "/usr", "/var", "/Users"]
 
+// Of those, the ones the system owns all the way down: /usr/share and /etc/ssh
+// are no better a target than /usr and /etc. The others hold mount points and
+// scratch space (/mnt/disk, /srv/backup, /tmp/try, /media/…), where a subfolder
+// is exactly where a backup belongs, so only the folder itself is refused.
+var SYSTEM_TREES = ["/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/proc", "/sbin", "/sys", "/usr"]
+
+function insideSystemTree(p) {
+  for (var i = 0; i < SYSTEM_TREES.length; i++) if (isInside(p, SYSTEM_TREES[i])) return true
+  return false
+}
+
 // p must be absolute (Locations.absolutePath resolves ~ and relative paths)
 function protectedPath(p, home) {
   if (p === "" || p === "/" || p.charAt(0) !== "/") return true
-  if (PROTECTED_DIRS.indexOf(p) >= 0) return true
+  if (PROTECTED_DIRS.indexOf(p) >= 0 || insideSystemTree(p)) return true
   var h = home ? normalizePath(home) : ""
   // udisks puts your drives in /run/media/USER; other tools (VeraCrypt: /run/media/veracrypt1)
   // mount a drive right there, and its root is a fine mirror target. A drive mounted
@@ -475,7 +486,8 @@ function protectedPath(p, home) {
 // /home/NAME or /Users/NAME, which is the remote home written out
 function protectedRemotePath(p) {
   var rp = normalizePath(String(p).replace(/^~[^\/]*\/?/, ""))
-  return rp === "" || rp === "/" || PROTECTED_DIRS.indexOf(rp) >= 0 || /^\/(home|Users)\/[^\/]+$/.test(rp)
+  return rp === "" || rp === "/" || PROTECTED_DIRS.indexOf(rp) >= 0 || insideSystemTree(rp)
+    || /^\/(home|Users)\/[^\/]+$/.test(rp)
 }
 
 function checkSafety(src, dst, argv, home, errors, warnings) {
@@ -601,7 +613,7 @@ function buildArgs(job, defaultRsh) {
   if (on("safeNames")) {
     var srcT = String(job.src || "").trim(), dstT = String(job.dst || "").trim()
     if (isRemote(srcT) || isRemote(dstT)) errors.push("Safe file names works with local folders and drives only: turn it off (Options › Filter options) for server paths, or switch to Easy mode, which does it for you")
-    var clash = ["relative", "filesFrom", "linkDest", "compareDest", "copyDest", "readBatch", "writeBatch", "onlyWriteBatch", "listOnly"]
+    var clash = ["relative", "filesFrom", "linkDest", "compareDest", "copyDest", "readBatch", "writeBatch", "onlyWriteBatch", "listOnly", "keepDirlinks"]
       .filter(function(k) { return BY_KEY[k].type === "bool" ? on(k) : !!get(opts, k) })
     if (clash.length) errors.push("Safe file names can't be combined with " + clash.map(function(k) { return BY_KEY[k].label }).join(", "))
     var bdir = String(get(opts, "backupDir") || "")

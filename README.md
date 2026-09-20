@@ -156,12 +156,26 @@ needs the Omarchy shell to be running, so a timer only fires while you are logge
 ### A safety net for the dangerous flags
 
 - A run that deletes on the destination is **refused** when the destination is `/`,
-  a system folder, `/run/media/<user>`, your home folder or any folder containing
-  it — and the same protection applies to the source of a Move.
+  `/run/media/<user>`, your home folder or any folder containing it, and anywhere
+  inside a system tree (`/usr`, `/etc`, `/bin`, `/boot`, `/lib`, `/sbin`, `/dev`,
+  `/proc`, `/sys`) — the remote side of an SSH job included, where you might be
+  root. `/mnt`, `/srv`, `/opt`, `/media`, `/tmp` and `/var` are refused as such,
+  but a folder inside them is exactly where a backup belongs and stays allowed.
+  The same protection applies to the source of a Move.
 - Before such a run, local paths are resolved with `realpath` and checked again, so
   a symlink can't smuggle the job into your home folder. Every mount point is
   checked too: a drive mounted inside the destination is never emptied along with
   it.
+- Drives are remembered by their filesystem UUID, which can be cloned, so the
+  drive's serial, size and file system are remembered with it. A drive that
+  carries the UUID but not that identity is reported instead of quietly becoming
+  the job's destination.
+- With *Safe file names*, the pass that clears renamed left-overs off the
+  destination walks it through directory file descriptors opened with
+  `O_NOFOLLOW`. A symlinked folder is reported and skipped instead of followed,
+  a drive that appeared inside the destination is left alone, what your filters
+  exclude is kept, and every removed entry counts against `--max-delete` —
+  exactly as rsync's own `--delete` treats them.
 - A deleting run needs a **second click** on *Confirm run* within four seconds.
   Editing the job cancels it.
 - **Dry run** is always one click away and changes nothing.
@@ -232,13 +246,14 @@ Built and used on an Apple MacBook Air M2 running Omarchy 4.0.3 on Asahi Linux
 | Folder → folder on the laptop | Copy and Mirror, dry runs, filters, the delete guards |
 | Laptop → USB hard disk (WD 2 TB, **exFAT**) | Mirror with `--delete`, safety copy, safe file names, drive recognised by UUID, unplugging and plugging back in |
 | Linux server (StartOS) over SSH → the same USB disk | Password login answered in the popup, password remembered in the keyring, `Set up key login`, and a key with a passphrase kept in the keyring |
-| exFAT image on a loop device | Edge cases of safe file names: look-alike collisions, names differing only in case, names that would become `.` or `..`, deletions with `--max-delete` |
+| exFAT image on a loop device | Edge cases of safe file names: look-alike collisions, names differing only in case, names that would become `.` or `..`, deletions with `--max-delete`, a symlinked folder on the destination |
 
 Automated tests, no shell needed:
 
 ```sh
-node test-options.js   # 23 tests: option catalog, argv, safety guards, parsing, presets
+node test-options.js   # 24 tests: option catalog, argv, safety guards, parsing, presets
 node test-easy.js      #  7 tests: Easy mode questions, answers and summary
+python3 test-safenames.py   # 15 tests: safe file names against a real rsync
 ```
 
 **Not tested yet**, so reports are welcome: laptop-to-laptop over SSH, uploading to
