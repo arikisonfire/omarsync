@@ -32,7 +32,8 @@ of a terminal, and shows you the command it is about to run.
 - **How careful:** Quick compares size and date, Thorough compares checksums.
 - **Safety and what to leave out:** keep a safety copy (replaced and deleted files
   are moved to `.rsync-backup/<date>` first), skip caches and trash, skip system
-  junk files.
+  junk files. Skipped junk goes from the destination too, so Mirror really empties
+  a folder the source no longer has; caches and trash there are yours and stay.
 - **Connection** (server jobs): slow connection, resume interrupted files, and a
   speed limit. A local job shows them only while one is on, so a loaded profile
   hides nothing.
@@ -207,6 +208,10 @@ time stamps make every run copy everything again.
   `pass…=`, `scheme://user:pw@`).
 - The log shows rsync's itemized changes live, filtered by New, Updated, Deleted,
   Attributes and Messages, with the current rate, the elapsed time and a Stop button.
+- rsync exits 0 over a folder it could not remove because the filters keep
+  something inside it. Those folders are **counted and named**, the run reads
+  *partly finished* instead of a plain success, and the log says which filter
+  rule would let them go.
 
 ### Bar icon
 

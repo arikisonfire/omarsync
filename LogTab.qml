@@ -126,6 +126,7 @@ Item {
         if (panel.stats.files !== undefined) parts.push(panel.stats.files + " files in source")
         if (panel.stats.transferredSize) parts.push(panel.stats.transferredSize + " bytes transferred")
         if (panel.stats.rate) parts.push(panel.stats.rate + " bytes/s")
+        if (panel.notDeleted) parts.push(panel.notDeleted + " folders not removed")
         return parts.join(" · ")
       }
       color: panel.dim

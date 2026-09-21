@@ -632,6 +632,11 @@ Panel {
   property bool stuckAfterStop: false
   property bool authFailed: false
   property var lastErrors: []
+  // Folders rsync could not remove because the filters protect something
+  // inside them. It reports those on stdout and still exits 0, so a run that
+  // left the destination unfinished would otherwise look like a plain success.
+  property int notDeleted: 0
+  readonly property int notDeletedShown: 20      // how many of them reach the log
   readonly property bool running: runSession.active
   // A dry run moves no data, so rsync reports 0 % at an absurd rate with ETA
   // 0:00:00. Its file counter is real, so the display follows that instead.
@@ -784,7 +789,9 @@ Panel {
     root.stats = {}
     root._stats = {}
     root.counts = { "new": 0, update: 0, "delete": 0, attr: 0 }
-    root._live = { counts: { "new": 0, update: 0, "delete": 0, attr: 0 }, listed: {}, items: [], logs: [], progress: null, dirty: false }
+    root.notDeleted = 0
+    root._live = { counts: { "new": 0, update: 0, "delete": 0, attr: 0 }, listed: {}, items: [], logs: [], progress: null,
+                   notDeleted: 0, lastNotDeleted: "", dirty: false }
     root.lastExit = -1
     root.runEnd = 0
     root.lastStatus = ""
@@ -846,6 +853,7 @@ Panel {
       l.logs = []
     }
     root.counts = Object.assign({}, l.counts)
+    root.notDeleted = l.notDeleted
     if (l.progress) root.progress = l.progress
   }
 
@@ -886,6 +894,19 @@ Panel {
       l.dirty = true
       return
     }
+    var kept = Options.parseNotDeleted(line)
+    if (kept !== null) {
+      // rsync names the same folder twice in a row, and a big leftover tree
+      // makes tens of thousands of these lines: count the folders and let only
+      // the first few into the log, which holds 400 lines in all.
+      if (kept !== l.lastNotDeleted) {
+        l.lastNotDeleted = kept
+        l.notDeleted++
+        l.dirty = true
+        if (l.notDeleted <= root.notDeletedShown) appendLog(line, true)
+      }
+      return
+    }
     if (line.trim() !== "" && !/^(sending|receiving) incremental file list$/.test(line) && !/^building file list/.test(line))
       appendLog(line, false)
   }
@@ -906,10 +927,15 @@ Panel {
       else root.authState = ""
     }
     root._live = null
+    if (root.notDeleted > 0)
+      root.appendLog(root.notDeleted + (root.notDeleted === 1 ? " folder was" : " folders were")
+        + " not removed: files the filters skip are still in them. rsync never deletes what it skips, "
+        + "so put a “risk” rule for those patterns above their exclude rule to clear them from the "
+        + "destination as well.", true)
     root.stats = Object.assign({}, root._stats)
     root.lastExit = code
     root.runEnd = Date.now()
-    root.lastStatus = Options.exitStatus(code, stopped, root.itemTotal)
+    root.lastStatus = Options.exitStatus(code, stopped, root.itemTotal, root.notDeleted)
     root.dropPrompts("run")
     if (code === 0 || code === 23 || code === 24 || code === 25) root.authSucceeded()
     root.pendingSecret = ""
@@ -918,7 +944,7 @@ Panel {
     var entry = {
       id: cur.id, start: cur.start, end: Date.now(), dry: cur.dry, job: Options.redactJob(cur.job), command: cur.command,
       code: code, status: root.lastStatus, exitText: stopped ? "Stopped" : Options.exitText(code),
-      stats: root.stats, counts: root.counts, errors: root.lastErrors
+      stats: root.stats, counts: root.counts, notDeleted: root.notDeleted, errors: root.lastErrors
     }
     root.history = [entry].concat(root.history).slice(0, root.historyLimit)
     root.saveHistory()
@@ -1304,7 +1330,10 @@ Panel {
       parts.push((c["new"] || 0) + " new, " + (c.update || 0) + " updated" + (c["delete"] ? ", " + c["delete"] + " deleted" : ""))
       if (s.transferredSize && !h.dry) parts.push(s.transferredSize + " bytes")
     }
-    if (h.status !== "ok") parts.push(h.exitText)
+    if (h.notDeleted) parts.push(h.notDeleted + (h.notDeleted === 1 ? " folder" : " folders") + " not removed")
+    // rsync exits 0 over a folder it could not remove, so its own word for the
+    // code would read "Success" next to the line that says otherwise.
+    if (h.status !== "ok" && h.code !== 0) parts.push(h.exitText)
     return parts.join(" · ")
   }
 

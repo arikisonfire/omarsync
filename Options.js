@@ -274,9 +274,11 @@ function exitText(code) {
 
 // ok | partial | failed | stopped
 // changed: number of itemized changes; code 23 without any is a plain failure
-function exitStatus(code, stopped, changed) {
+// notDeleted: folders rsync could not remove. It exits 0 over those, but the
+// destination is not the copy of the source it was asked to make.
+function exitStatus(code, stopped, changed, notDeleted) {
   if (stopped) return "stopped"
-  if (code === 0) return "ok"
+  if (code === 0) return notDeleted ? "partial" : "ok"
   if (code === 23 && changed === 0) return "failed"
   if (code === 23 || code === 24 || code === 25) return "partial"
   return "failed"
@@ -715,6 +717,19 @@ function parseItem(line) {
     : code[0] === "c" ? "new"
     : code[0] === "." ? "attr" : "other"
   return { kind: kind, path: m[2], code: code }
+}
+
+// rsync never deletes what the filters exclude, so a folder on the receiver
+// that holds nothing else cannot be removed. It says so on stdout, not stderr,
+// and still exits 0: without this the run looks like a plain success while the
+// destination keeps folders the source no longer has. Returns the folder, or
+// null. rsync prints the same one twice in a row (once while emptying it, once
+// when the rmdir fails), so callers count changes, not lines.
+var NOT_DELETED_RE = /^cannot delete non-empty directory: (.+)$/
+
+function parseNotDeleted(line) {
+  var m = NOT_DELETED_RE.exec(String(line))
+  return m ? m[1] : null
 }
 
 function parseNumber(s) {

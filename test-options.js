@@ -97,6 +97,20 @@ test("progress, item and stats parsing", () => {
   assert.strictEqual(s.transferred, 1234); assert.strictEqual(s.sent, "1.23K")
 })
 
+test("a folder rsync could not remove is caught and weighs on the status", () => {
+  assert.strictEqual(O.parseNotDeleted("cannot delete non-empty directory: 260818 - Nextcloud/Fotos"), "260818 - Nextcloud/Fotos")
+  assert.strictEqual(O.parseNotDeleted("cannot delete non-empty directory: "), null)
+  assert.strictEqual(O.parseNotDeleted("*deleting   old.txt"), null)
+  assert.strictEqual(O.parseItem("cannot delete non-empty directory: a/b"), null)
+  // rsync exits 0 over those folders, so only their number tells the run apart
+  // from one that really made the destination a copy of the source
+  assert.strictEqual(O.exitStatus(0, false, 5), "ok")
+  assert.strictEqual(O.exitStatus(0, false, 5, 0), "ok")
+  assert.strictEqual(O.exitStatus(0, false, 5, 9798), "partial")
+  assert.strictEqual(O.exitStatus(0, true, 5, 9798), "stopped")
+  assert.strictEqual(O.exitStatus(23, false, 0, 3), "failed")
+})
+
 test("safety: deleting into /, home, remote home, source inside destination", () => {
   const e = (opts, extra) => O.buildArgs(Object.assign(job(opts, extra), { home: "/home/me" })).errors
   assert(e({ archive: true, delete: true }, { dst: "/" }).some(x => /Refusing/.test(x)))

@@ -23,11 +23,19 @@ var BANDWIDTH = [
   { id: "2", label: "2 MB/s", kib: 2048 }
 ]
 
+// `risky`: patterns the destination may lose as well. An exclude rule protects
+// what it matches from --delete too, so a destination folder holding nothing
+// but skipped files can never be removed and Mirror quietly leaves it behind.
+// A "risk" rule takes that protection away again — for the junk files only.
+// The three system folders keep it: they belong to the destination drive, not
+// to the source. The caches set keeps it as well, because deleted files and a
+// program's cache at the destination are the user's, not leftovers of a copy.
 var SKIP_SETS = [
   { id: "caches", label: "Caches and trash", hint: "Temporary files programs can recreate, and deleted files",
     patterns: [".cache/", ".Trash-*/", ".local/share/Trash/"] },
   { id: "systemJunk", label: "System junk files", hint: ".DS_Store, Thumbs.db, desktop.ini, lost+found and similar",
-    patterns: [".DS_Store", "._*", "Thumbs.db", "desktop.ini", "$RECYCLE.BIN/", "System Volume Information/", "lost+found/"] }
+    patterns: [".DS_Store", "._*", "Thumbs.db", "desktop.ini", "$RECYCLE.BIN/", "System Volume Information/", "lost+found/"],
+    risky: [".DS_Store", "._*", "Thumbs.db", "desktop.ini"] }
 ]
 
 // Options a goal (preset, plain or adapted to FAT/exFAT/NTFS) may set
@@ -52,17 +60,29 @@ function skipOn(filters, set) {
   return set.patterns.every(function(p) { return hasFilter(filters, { type: "exclude", pattern: p }) })
 }
 
+// Whether the destination loses what this set skips. A job saved before the
+// risk rules existed answers no, and its summary says so instead of promising
+// an exact copy it cannot make.
+function riskedOn(filters, set) {
+  var risky = set.risky || []
+  return risky.length > 0 && risky.every(function(p) { return hasFilter(filters, { type: "risk", pattern: p }) })
+}
+
 function ownedFilter(f) {
-  if (!f || f.type !== "exclude") return false
-  if (f.pattern === BACKUP_FILTER.pattern) return true
-  return SKIP_SETS.some(function(s) { return s.patterns.indexOf(f.pattern) >= 0 })
+  if (!f) return false
+  if (f.type === "exclude" && f.pattern === BACKUP_FILTER.pattern) return true
+  if (f.type !== "exclude" && f.type !== "risk") return false
+  return SKIP_SETS.some(function(s) {
+    return (f.type === "risk" ? (s.risky || []) : s.patterns).indexOf(f.pattern) >= 0
+  })
 }
 
 function isSafetyCopy(opts) {
   return Options.isOn(opts, "backup") && String(opts.backupDir || "").replace(/\/+$/, "") === BACKUP_DIR
 }
 
-// { goal, thorough, safetyCopy, slowLink, resume, bandwidth, skip: {id: bool}, extras: [label] }
+// { goal, thorough, safetyCopy, slowLink, resume, bandwidth, skip: {id: bool},
+//   riskedSkip: {id: bool}, extras: [label] }
 function read(job) {
   var opts = job.opts || {}
   var filters = job.filters || []
@@ -72,7 +92,11 @@ function read(job) {
   for (var b = 0; b < BANDWIDTH.length; b++) if (BANDWIDTH[b].kib === bw) band = BANDWIDTH[b].id
 
   var skip = {}
-  SKIP_SETS.forEach(function(s) { skip[s.id] = skipOn(filters, s) })
+  var riskedSkip = {}
+  SKIP_SETS.forEach(function(s) {
+    skip[s.id] = skipOn(filters, s)
+    riskedSkip[s.id] = riskedOn(filters, s)
+  })
 
   var extras = []
   for (var k in opts) {
@@ -103,6 +127,7 @@ function read(job) {
     resume: Options.isOn(opts, "partial"),
     bandwidth: band,
     skip: skip,
+    riskedSkip: riskedSkip,
     extras: extras
   }
 }
@@ -142,6 +167,17 @@ function withAnswer(job, key, value) {
     var m = /^skip\.(\w+)$/.exec(key)
     var set_ = m && SKIP_SETS.filter(function(s) { return s.id === m[1] })[0]
     if (!set_) break
+    var risky = set_.risky || []
+    if (value) {
+      // The first matching rule wins, so a risk rule only counts in front of
+      // the exclude rule with the same pattern. Appending would put it behind
+      // an exclude that is already there, where it does nothing.
+      filters = risky.filter(function(p) { return !hasFilter(filters, { type: "risk", pattern: p }) })
+                     .map(function(p) { return { type: "risk", pattern: p } })
+                     .concat(filters)
+    } else {
+      risky.forEach(function(p) { dropFilter({ type: "risk", pattern: p }) })
+    }
     set_.patterns.forEach(function(p) {
       if (value) addFilter({ type: "exclude", pattern: p })
       else dropFilter({ type: "exclude", pattern: p })
@@ -168,8 +204,14 @@ function summary(job, ctx) {
   }
   out.push(a.thorough ? "Compares the contents of every file (slower, catches every change)." : "Detects changes by size and date.")
   if (a.safetyCopy) out.push("Files that get replaced or deleted are kept in " + BACKUP_ROOT + " at the destination, in a folder per run.")
-  var skipped = SKIP_SETS.filter(function(s) { return a.skip[s.id] }).map(function(s) { return s.label.toLowerCase() })
-  if (skipped.length) out.push("Skips " + skipped.join(" and ") + ".")
+  var on = SKIP_SETS.filter(function(s) { return a.skip[s.id] })
+  if (on.length) out.push("Skips " + on.map(function(s) { return s.label.toLowerCase() }).join(" and ") + ".")
+  // What rsync does with skipped files that are already at the destination is
+  // the difference between a copy and an exact copy, so say which one it is.
+  if (on.length && Options.isOn(job.opts, "delete"))
+    out.push(on.every(function(s) { return a.riskedSkip[s.id] })
+      ? "Skipped files are removed from " + quoted(ctx.dstName) + " too."
+      : "Skipped files already in " + quoted(ctx.dstName) + " stay there, and a folder that holds nothing else cannot be removed.")
   if (ctx.dstFs) out.push("The drive uses " + ctx.dstFs + ": settings it can't store are left out"
     + (Options.isOn(job.opts, "safeNames") ? " and names it can't store get look-alike characters." : "."))
   if (ctx.remote && (a.slowLink || a.bandwidth !== "full" || a.resume)) {

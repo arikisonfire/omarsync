@@ -55,6 +55,40 @@ test("skip sets add and remove only their rules", () => {
   assert.deepStrictEqual(plain(j.filters), [{ type: "exclude", pattern: "*.iso" }])
 })
 
+test("skipping junk clears it from the destination as well", () => {
+  const junk = E.SKIP_SETS.filter(s => s.id === "systemJunk")[0]
+  let j = apply(job(O.presetOpts(preset("mirror"), false)), "skip.systemJunk", true)
+  const a = E.read(j)
+  assert(a.skip.systemJunk && a.riskedSkip.systemJunk)
+  assert.deepStrictEqual(plain(a.extras), [])
+  // the first matching rule wins: a risk rule behind its exclude does nothing
+  for (const p of junk.risky) {
+    const r = j.filters.findIndex(f => f.type === "risk" && f.pattern === p)
+    const x = j.filters.findIndex(f => f.type === "exclude" && f.pattern === p)
+    assert(r >= 0 && x > r, p + ": risk at " + r + ", exclude at " + x)
+  }
+  const argv = Array.from(O.runArgs(j, "ssh", false, Date.now()).argv)
+  assert(argv.indexOf("--filter=risk ._*") < argv.indexOf("--exclude=._*"), argv.join(" "))
+  // the destination drive's own folders keep their protection
+  assert(!argv.some(x => /^--filter=risk (\$RECYCLE|System Volume|lost\+found)/.test(x)), argv.join(" "))
+  j = apply(j, "skip.systemJunk", false)
+  assert.strictEqual(j.filters.length, 0)
+})
+
+test("summary says what happens to skipped files at the destination", () => {
+  const ctx = { srcName: "a", dstName: "Backup", contentsOnly: true, remote: false, dstFs: "" }
+  const mirror = job(O.presetOpts(preset("mirror"), false))
+  assert(/removed from “Backup” too/.test(E.summary(apply(mirror, "skip.systemJunk", true), ctx)))
+  // saved before the risk rules existed: the promise it can keep, not the one it can't
+  const old = job(O.presetOpts(preset("mirror"), false),
+    { filters: E.SKIP_SETS.filter(s => s.id === "systemJunk")[0].patterns.map(p => ({ type: "exclude", pattern: p })) })
+  assert(/cannot be removed/.test(E.summary(old, ctx)))
+  // trash and caches at the destination are the user's, so they stay
+  assert(/cannot be removed/.test(E.summary(apply(mirror, "skip.caches", true), ctx)))
+  // nothing is deleted at all, so there is nothing to say
+  assert(!/cannot be removed|removed from/.test(E.summary(apply(job(O.presetOpts(preset("copy"), false)), "skip.caches", true), ctx)))
+})
+
 test("safety copy: backup dir, protecting filter, dated run folder", () => {
   const j = apply(job(O.presetOpts(preset("mirror"), false)), "safetyCopy", true)
   assert(j.filters.some(f => f.type === "exclude" && f.pattern === "/.rsync-backup/"))
