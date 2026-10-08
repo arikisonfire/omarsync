@@ -390,6 +390,119 @@ def folder_times_are_restored(root):
     assert int(got) == 1000000000, "folder time is %d" % got
 
 
+# ---- a folder the source no longer has goes as a whole ----
+
+def gone(root):
+    """The source keeps Docs, the destination still has Archive from an earlier
+    run: renamed files at several depths, a renamed folder, a renamed file
+    inside that one, and plain files next to them."""
+    write(os.path.join(root, "src", "Docs", "normal.txt"))
+    write(os.path.join(root, "dst", "Docs", "normal.txt"))
+    write(os.path.join(root, "dst", "Archive", "2019", "Drafts", "Report -＞ Final.pdf"), "old")
+    write(os.path.join(root, "dst", "Archive", "2019", "Drafts", "plain.pdf"), "old")
+    write(os.path.join(root, "dst", "Archive", "Old", "Notes 2019：2020", "photo.jpg"), "old")
+    write(os.path.join(root, "dst", "Archive", "Old", "Notes 2019：2020", "inner：x.jpg"), "old")
+
+
+def a_folder_gone_from_the_source_goes_as_a_whole(root):
+    """The protect rules kept the renamed files from rsync's --delete, and
+    step 4 only walks folders the source still has: they stayed, with every
+    folder above them, and rsync said "cannot delete non-empty directory" on
+    every run, so the job never finished."""
+    gone(root)
+    code, out, err = run(root, "to", "-a", "--delete", "--itemize-changes", "--", "src/", "dst/")
+    assert "cannot delete" not in out, [l for l in out.splitlines() if "cannot delete" in l]
+    assert tree(os.path.join(root, "dst")) == {"Docs", os.path.join("Docs", "normal.txt")}, \
+        tree(os.path.join(root, "dst"))
+    assert code == 0, "exit %d, expected 0: %s" % (code, err)
+
+
+def a_dry_run_says_so_too(root):
+    gone(root)
+    before = tree(os.path.join(root, "dst"))
+    code, out, err = run(root, "to", "-a", "--delete", "--dry-run", "--itemize-changes", "--", "src/", "dst/")
+    assert "cannot delete" not in out, [l for l in out.splitlines() if "cannot delete" in l]
+    for path in ("Archive/", "Archive/2019/Drafts/Report -＞ Final.pdf", "Archive/Old/Notes 2019：2020/inner：x.jpg"):
+        assert path in deletions(out), "%s missing from %s" % (path, deletions(out))
+    assert tree(os.path.join(root, "dst")) == before, "a dry run removed something"
+    assert code == 0, "exit %d, expected 0: %s" % (code, err)
+
+
+def what_the_job_excludes_still_holds_a_gone_folder(root):
+    """Only the protection safe names adds is lifted: a file the job's own
+    filters exclude keeps its folder, the way rsync always does."""
+    gone(root)
+    write(os.path.join(root, "dst", "Archive", "2019", "Drafts", "notes.log"), "old")
+    code, out, err = run(root, "to", "-a", "--delete", "--exclude=*.log", "--itemize-changes", "--", "src/", "dst/")
+    assert os.path.exists(os.path.join(root, "dst", "Archive", "2019", "Drafts", "notes.log")), "the excluded file was deleted"
+    assert not os.path.exists(os.path.join(root, "dst", "Archive", "2019", "Drafts", "Report -＞ Final.pdf")), \
+        "the renamed file next to it stayed"
+    assert not os.path.exists(os.path.join(root, "dst", "Archive", "Old")), "a folder without excluded files stayed"
+    assert "cannot delete non-empty directory: Archive/2019/Drafts" in out, out
+
+
+def risked_junk_goes_with_a_gone_folder(root):
+    """Easy's "Skip system junk files" lets the destination lose .DS_Store and
+    ._* files ("risk" in front of "exclude"). The AppleDouble file of a renamed
+    file has a renamed name itself, and the protect rule used to win."""
+    gone(root)
+    write(os.path.join(root, "dst", "Archive", "2019", "Drafts", "._Report -＞ Final.pdf"), "old")
+    write(os.path.join(root, "dst", "Archive", "2019", "Drafts", ".DS_Store"), "old")
+    code, out, err = run(root, "to", "-a", "--delete", "--filter=risk ._*", "--filter=risk .DS_Store",
+                         "--exclude=._*", "--exclude=.DS_Store", "--itemize-changes", "--", "src/", "dst/")
+    assert tree(os.path.join(root, "dst")) == {"Docs", os.path.join("Docs", "normal.txt")}, \
+        tree(os.path.join(root, "dst"))
+    assert code == 0, "exit %d, expected 0: %s" % (code, err)
+
+
+def a_gone_folder_inside_a_renamed_folder(root):
+    """Pass 3 syncs a renamed folder on its own, with the same rules."""
+    write(os.path.join(root, "src", "Docs", "pro:ject", "keep.txt"))
+    write(os.path.join(root, "dst", "Docs", "pro：ject", "keep.txt"))
+    write(os.path.join(root, "dst", "Docs", "pro：ject", "old", "x：y.txt"), "old")
+    code, out, err = run(root, "to", "-a", "--delete", "--itemize-changes", "--", "src/", "dst/")
+    assert "cannot delete" not in out, [l for l in out.splitlines() if "cannot delete" in l]
+    assert tree(os.path.join(root, "dst")) == {"Docs", os.path.join("Docs", "pro：ject"),
+                                               os.path.join("Docs", "pro：ject", "keep.txt")}, \
+        tree(os.path.join(root, "dst"))
+
+
+def restoring_removes_a_gone_folder_too(root):
+    """Direction "from": the real names are the protected ones."""
+    write(os.path.join(root, "src", "Docs", "normal.txt"))
+    write(os.path.join(root, "dst", "Docs", "normal.txt"))
+    write(os.path.join(root, "dst", "Old", "a:b.txt"), "old")
+    code, out, err = run(root, "from", "-a", "--delete", "--itemize-changes", "--", "src/", "dst/")
+    assert tree(os.path.join(root, "dst")) == {"Docs", os.path.join("Docs", "normal.txt")}, \
+        tree(os.path.join(root, "dst"))
+    assert code == 0, "exit %d, expected 0: %s" % (code, err)
+
+
+def renamed_files_of_the_source_stay(root):
+    """The protection itself still holds where the source has the folder:
+    a second run neither deletes nor copies the renamed file again."""
+    write(os.path.join(root, "src", "Docs", "a:b.txt"))
+    os.makedirs(os.path.join(root, "dst"))
+    run(root, "to", "-a", "--delete", "--itemize-changes", "--", "src/", "dst/")
+    code, out, err = run(root, "to", "-a", "--delete", "--itemize-changes", "--", "src/", "dst/")
+    assert deletions(out) == [], deletions(out)
+    assert not [l for l in out.splitlines() if l.startswith(">f")], out
+    assert os.path.exists(os.path.join(root, "dst", "Docs", "a：b.txt")), "the renamed file is gone"
+    assert code == 0, "exit %d, expected 0: %s" % (code, err)
+
+
+def trailing_dots_and_spaces_are_still_renamed(root):
+    """The rules changed their spelling ("--filter=-p" for "--exclude="): a
+    name the drive cannot store must still reach it only under its new name."""
+    write(os.path.join(root, "src", "Docs", "end "))
+    write(os.path.join(root, "src", "Docs", "end."))
+    write(os.path.join(root, "src", "Docs", "a:b"))
+    os.makedirs(os.path.join(root, "dst"))
+    code, out, err = run(root, "to", "-a", "--delete", "--itemize-changes", "--", "src/", "dst/")
+    assert tree(os.path.join(root, "dst", "Docs")) == {"end␠", "end．", "a：b"}, tree(os.path.join(root, "dst", "Docs"))
+    assert code == 0, "exit %d, expected 0: %s" % (code, err)
+
+
 for case in (symlinked_folder_with_keep_dirlinks, symlink_planted_during_the_run,
              destination_root_swapped_during_the_run, a_symlinked_destination_still_works,
              walk_down_refuses_symlinks, accepted_destination_is_bound_to_its_inode,
@@ -397,7 +510,11 @@ for case in (symlinked_folder_with_keep_dirlinks, symlink_planted_during_the_run
              excluded_names_survive, delete_excluded_removes_them, protect_rules_stop_the_pass,
              source_without_a_slash_and_an_unsafe_root, restoring_from_a_drive, a_dry_run_only_reports,
              max_delete_is_honoured, without_recursion_it_stays_at_the_top,
-             max_delete_counts_a_whole_folder, an_unreadable_folder_is_reported, folder_times_are_restored):
+             max_delete_counts_a_whole_folder, an_unreadable_folder_is_reported, folder_times_are_restored,
+             a_folder_gone_from_the_source_goes_as_a_whole, a_dry_run_says_so_too,
+             what_the_job_excludes_still_holds_a_gone_folder, risked_junk_goes_with_a_gone_folder,
+             a_gone_folder_inside_a_renamed_folder, restoring_removes_a_gone_folder_too,
+             renamed_files_of_the_source_stay, trailing_dots_and_spaces_are_still_renamed):
     test(case.__name__.replace("_", " "), case)
 
 if failures:

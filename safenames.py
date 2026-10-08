@@ -13,7 +13,8 @@ names and rsync's normal size/time check skips unchanged ones.
 How a run works:
   1. rsync lists SRC with the job's filters (so excluded files stay excluded).
   2. The job's own rsync runs with every unsafe name excluded and every renamed
-     name protected from --delete.
+     name protected from --delete, except in a folder rsync removes because
+     the source no longer has it: that one goes with everything in it.
   3. Each unsafe entry runs as its own rsync pass to its renamed path
      (directories recursively, again without their unsafe children).
   4. With deleting on, renamed entries on DST whose source is gone are removed.
@@ -74,11 +75,19 @@ def to_unix(name):
 
 
 def rules(direction):
-    """(exclude, protect) rsync arguments for one direction."""
+    """(exclude, protect) rsync arguments for one direction.
+
+    Both are perishable ("p"): rsync ignores them inside a folder it deletes
+    because the source no longer has it. The protection is for renamed files
+    whose source still exists under its real name, and step 4 only clears the
+    others in folders the source still has. In a folder that left the source
+    as a whole the renamed files stayed, so did every folder above them, and
+    rsync reported "cannot delete non-empty directory" on every run. The job's
+    own filters are left as they are: what they exclude keeps its folder."""
     ascii_patterns = ["*[%s]*" % c for c in UNSAFE] + ["*[\x01-\x1f]*", "*.", "* "]
     look_patterns = ["*%s*" % c for c in LOOKALIKE] + ["*%s*" % chr(0x2400 + c) for c in range(1, 32)] + ["*．", "*␠"]
     unsafe, renamed = (ascii_patterns, look_patterns) if direction == "to" else (look_patterns, ascii_patterns)
-    return ["--exclude=" + p for p in unsafe], ["--filter=P " + p for p in renamed]
+    return ["--filter=-p " + p for p in unsafe], ["--filter=Pp " + p for p in renamed]
 
 
 def out(line):
